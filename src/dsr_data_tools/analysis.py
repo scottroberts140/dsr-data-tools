@@ -454,7 +454,7 @@ def analyze_dataset(
     for c in range(n):
         col = df_info.columns[c]
         analyze_column_data(df[col.name], df_info.columns[c])
-        
+
         # Display recommendations for this column if available
         if recommendations and col.name in recommendations:
             col_recs = recommendations[col.name]

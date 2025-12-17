@@ -113,18 +113,22 @@ class MissingValuesRecommendation(Recommendation):
         elif self.strategy == MissingValueStrategy.IMPUTE:
             # Default to median for numeric, mode for categorical
             if pd.api.types.is_numeric_dtype(result[self.column_name]):
-                result[self.column_name].fillna(
-                    result[self.column_name].median(), inplace=True)
+                fill_value = result[self.column_name].median()
+                result[self.column_name] = result[self.column_name].fillna(fill_value)
             else:
-                result[self.column_name].fillna(
-                    result[self.column_name].mode()[0], inplace=True)
+                mode_value = result[self.column_name].mode()
+                if len(mode_value) > 0:
+                    result[self.column_name] = result[self.column_name].fillna(mode_value[0])
+                else:
+                    result[self.column_name] = result[self.column_name].fillna('Unknown')
 
         return result
 
     def info(self) -> None:
         """Display recommendation information."""
         print(f"  Recommendation: MISSING_VALUES")
-        print(f"    Missing count: {self.missing_count} ({self.missing_percentage:.2f}%)")
+        print(
+            f"    Missing count: {self.missing_count} ({self.missing_percentage:.2f}%)")
         print(f"    Strategy: {self.strategy.value}")
         print(f"    Action: {self._get_strategy_description()}")
 
@@ -166,19 +170,23 @@ class EncodingRecommendation(Recommendation):
         result = df.copy()
 
         if self.encoder_type == EncodingStrategy.ONEHOT:
-            result = pd.get_dummies(result, columns=[self.column_name])
+            # One-hot encode - creates binary columns for each category
+            result = pd.get_dummies(result, columns=[self.column_name], drop_first=False)
 
         elif self.encoder_type == EncodingStrategy.LABEL:
+            # Label encode - assigns integer to each category
             from sklearn.preprocessing import LabelEncoder
             le = LabelEncoder()
-            result[self.column_name] = le.fit_transform(
-                result[self.column_name])
+            # Handle potential NaN values
+            mask = result[self.column_name].notna()
+            result.loc[mask, self.column_name] = le.fit_transform(
+                result.loc[mask, self.column_name].astype(str))
 
         elif self.encoder_type == EncodingStrategy.ORDINAL:
+            # Ordinal encode - preserves order
             from sklearn.preprocessing import OrdinalEncoder
-            oe = OrdinalEncoder()
-            result[self.column_name] = oe.fit_transform(
-                result[[self.column_name]])
+            oe = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+            result[self.column_name] = oe.fit_transform(result[[self.column_name]])
 
         return result
 
@@ -187,7 +195,8 @@ class EncodingRecommendation(Recommendation):
         print(f"  Recommendation: ENCODING")
         print(f"    Unique values: {self.unique_values}")
         print(f"    Encoder type: {self.encoder_type.value}")
-        print(f"    Action: Apply {self.encoder_type.value} encoding to '{self.column_name}'")
+        print(
+            f"    Action: Apply {self.encoder_type.value} encoding to '{self.column_name}'")
 
 
 @dataclass
@@ -261,14 +270,18 @@ class OutlierDetectionRecommendation(Recommendation):
         if self.strategy == OutlierStrategy.SCALING:
             from sklearn.preprocessing import StandardScaler
             scaler = StandardScaler()
-            result[self.column_name] = scaler.fit_transform(
-                result[[self.column_name]])
+            # Handle NaN values
+            mask = result[self.column_name].notna()
+            scaled_values = scaler.fit_transform(result.loc[mask, [self.column_name]])
+            result.loc[mask, self.column_name] = scaled_values
 
         elif self.strategy == OutlierStrategy.ROBUST_SCALER:
             from sklearn.preprocessing import RobustScaler
             scaler = RobustScaler()
-            result[self.column_name] = scaler.fit_transform(
-                result[[self.column_name]])
+            # Handle NaN values
+            mask = result[self.column_name].notna()
+            scaled_values = scaler.fit_transform(result.loc[mask, [self.column_name]])
+            result.loc[mask, self.column_name] = scaled_values
 
         elif self.strategy == OutlierStrategy.REMOVE:
             # Remove rows where value exceeds 1.5 * IQR beyond quartiles
@@ -277,17 +290,19 @@ class OutlierDetectionRecommendation(Recommendation):
             IQR = Q3 - Q1
             lower_bound = Q1 - 1.5 * IQR
             upper_bound = Q3 + 1.5 * IQR
-            result = result[(result[self.column_name] >= lower_bound) & (
-                result[self.column_name] <= upper_bound)]
+            result = result[(result[self.column_name] >= lower_bound) & 
+                           (result[self.column_name] <= upper_bound)].reset_index(drop=True)
 
         return result
 
     def info(self) -> None:
         """Display recommendation information."""
         print(f"  Recommendation: OUTLIER_DETECTION")
-        print(f"    Max value: {self.max_value:.2f}, Mean: {self.mean_value:.2f}")
+        print(
+            f"    Max value: {self.max_value:.2f}, Mean: {self.mean_value:.2f}")
         print(f"    Strategy: {self.strategy.value}")
-        print(f"    Action: Apply {self.strategy.value} to handle outliers in '{self.column_name}'")
+        print(
+            f"    Action: Apply {self.strategy.value} to handle outliers in '{self.column_name}'")
 
 
 @dataclass
@@ -347,15 +362,20 @@ class BinningRecommendation(Recommendation):
             DataFrame with column binned and one-hot encoded
         """
         result = df.copy()
-        result[self.column_name] = pd.cut(
-            result[self.column_name],
-            bins=self.bins,
-            labels=self.labels,
-            right=True,
-            include_lowest=True
-        )
+        try:
+            result[self.column_name] = pd.cut(
+                result[self.column_name],
+                bins=self.bins,
+                labels=self.labels,
+                right=True,
+                include_lowest=True
+            )
+        except Exception as e:
+            print(f"Warning: Could not bin column '{self.column_name}': {e}")
+            return result
+        
         # One-hot encode the binned column
-        result = pd.get_dummies(result, columns=[self.column_name])
+        result = pd.get_dummies(result, columns=[self.column_name], drop_first=False)
         return result
 
     def info(self) -> None:
@@ -363,7 +383,8 @@ class BinningRecommendation(Recommendation):
         print(f"  Recommendation: BINNING")
         print(f"    Bins: {self.bins}")
         print(f"    Labels: {self.labels}")
-        print(f"    Action: Bin '{self.column_name}' into {len(self.labels)} categories and encode")
+        print(
+            f"    Action: Bin '{self.column_name}' into {len(self.labels)} categories and encode")
 
 
 def create_recommendation(
