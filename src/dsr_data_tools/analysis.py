@@ -2,6 +2,23 @@ from __future__ import annotations
 import pandas as pd
 from typing import Type
 from dsr_utils import strings
+from dsr_data_tools.enums import (
+    RecommendationType,
+    EncodingStrategy,
+    MissingValueStrategy,
+    OutlierStrategy,
+    ImbalanceStrategy,
+)
+from dsr_data_tools.recommendations import (
+    Recommendation,
+    NonInformativeRecommendation,
+    MissingValuesRecommendation,
+    EncodingRecommendation,
+    ClassImbalanceRecommendation,
+    OutlierDetectionRecommendation,
+    BooleanClassificationRecommendation,
+    BinningRecommendation,
+)
 
 
 class DataframeColumn:
@@ -155,6 +172,184 @@ class DataframeInfo:
                 f'{c.name:<{col_width[0]}}{c.non_null_count:>{col_width[1]}}   {c.data_type.name:<{col_width[2]}}')
 
 
+def generate_recommendations(
+    df: pd.DataFrame,
+    target_column: str | None = None
+) -> dict[str, dict[str, Recommendation]]:
+    """Generate data preparation recommendations for each column in a DataFrame.
+    
+    Analyzes each column and generates appropriate recommendations based on
+    data characteristics (missing values, cardinality, data type, etc.).
+    
+    Args:
+        df (pd.DataFrame): The DataFrame to analyze.
+        target_column (str | None): Name of the target column (for imbalance detection).
+            If provided, class imbalance will be analyzed for this column.
+    
+    Returns:
+        dict[str, dict[str, Recommendation]]: Nested dictionary mapping column names
+            to recommendation types to Recommendation instances.
+    
+    Example:
+        >>> df = pd.DataFrame({
+        ...     'id': range(100),
+        ...     'name': ['Alice'] * 100,
+        ...     'age': [25] * 100 + [30] * 50,
+        ...     'salary': [50000] * 50 + [100000] * 50
+        ... })
+        >>> recs = generate_recommendations(df, target_column='name')
+        >>> recs['id']  # Non-informative (unique count == row count)
+        >>> recs['age']['encoding']  # Binary encoding recommendation
+    """
+    recommendations: dict[str, dict[str, Recommendation]] = {}
+    
+    for col_name in df.columns:
+        col_recommendations: dict[str, Recommendation] = {}
+        series = df[col_name]
+        
+        # 1. Check for non-informative columns
+        unique_count = series.nunique()
+        total_rows = len(df)
+        is_numeric = pd.api.types.is_numeric_dtype(series)
+        
+        # Non-informative: unique count equals total rows (e.g., ID column)
+        if unique_count == total_rows:
+            rec = NonInformativeRecommendation(
+                type=RecommendationType.NON_INFORMATIVE,
+                column_name=col_name,
+                description=f"Column '{col_name}' has unique value for each row.",
+                reason="Unique count equals row count"
+            )
+            col_recommendations['non_informative'] = rec
+            recommendations[col_name] = col_recommendations
+            continue
+        
+        # Non-informative: high cardinality object type (> 50% unique values)
+        if not is_numeric and unique_count > total_rows * 0.5:
+            rec = NonInformativeRecommendation(
+                type=RecommendationType.NON_INFORMATIVE,
+                column_name=col_name,
+                description=f"Column '{col_name}' has high cardinality ({unique_count} unique values).",
+                reason="High cardinality object type"
+            )
+            col_recommendations['non_informative'] = rec
+            recommendations[col_name] = col_recommendations
+            continue
+        
+        # 2. Check for missing values
+        missing_count = series.isna().sum()
+        if missing_count > 0:
+            missing_percentage = (missing_count / total_rows) * 100
+            
+            # Determine strategy based on percentage
+            if missing_percentage < 10:
+                strategy = MissingValueStrategy.DROP_ROWS
+            elif missing_percentage > 50:
+                strategy = MissingValueStrategy.DROP_COLUMN
+            else:
+                strategy = MissingValueStrategy.IMPUTE
+            
+            rec = MissingValuesRecommendation(
+                type=RecommendationType.MISSING_VALUES,
+                column_name=col_name,
+                description=f"Column '{col_name}' has {missing_count} missing values ({missing_percentage:.1f}%).",
+                missing_count=missing_count,
+                missing_percentage=missing_percentage,
+                strategy=strategy
+            )
+            col_recommendations['missing_values'] = rec
+        
+        # 3. Check for boolean classification (exactly 2 unique numeric values)
+        if is_numeric and unique_count == 2:
+            values = sorted(series.dropna().unique().tolist())
+            if values == [0.0, 1.0] or values == [0, 1]:
+                rec = BooleanClassificationRecommendation(
+                    type=RecommendationType.BOOLEAN_CLASSIFICATION,
+                    column_name=col_name,
+                    description=f"Column '{col_name}' should be treated as boolean.",
+                    values=values
+                )
+                col_recommendations['boolean_classification'] = rec
+        
+        # 4. Check for encoding recommendations (categorical columns)
+        if not is_numeric and col_name != target_column:
+            # Binary categorical: 2 unique values
+            if unique_count == 2:
+                rec = EncodingRecommendation(
+                    type=RecommendationType.ENCODING,
+                    column_name=col_name,
+                    description=f"Column '{col_name}' is binary categorical; recommend LabelEncoder.",
+                    encoder_type=EncodingStrategy.LABEL,
+                    unique_values=unique_count
+                )
+                col_recommendations['encoding'] = rec
+            
+            # Multi-class categorical: 3-10 unique values
+            elif 3 <= unique_count <= 10:
+                rec = EncodingRecommendation(
+                    type=RecommendationType.ENCODING,
+                    column_name=col_name,
+                    description=f"Column '{col_name}' is multi-class categorical; recommend OneHotEncoder.",
+                    encoder_type=EncodingStrategy.ONEHOT,
+                    unique_values=unique_count
+                )
+                col_recommendations['encoding'] = rec
+        
+        # 5. Check for outliers (numeric columns)
+        if is_numeric:
+            mean_value = series.mean()
+            max_value = series.max()
+            min_value = series.min()
+            
+            # Check if max value significantly exceeds mean (potential outliers)
+            if max_value > mean_value * 2:  # Max is more than 2x the mean
+                rec = OutlierDetectionRecommendation(
+                    type=RecommendationType.OUTLIER_DETECTION,
+                    column_name=col_name,
+                    description=f"Column '{col_name}' has potential outliers (max={max_value:.2f}, mean={mean_value:.2f}).",
+                    strategy=OutlierStrategy.SCALING,
+                    max_value=max_value,
+                    mean_value=mean_value
+                )
+                col_recommendations['outlier_detection'] = rec
+        
+        # 6. Check for class imbalance (target column)
+        if col_name == target_column and unique_count <= 2:
+            class_counts = series.value_counts()
+            max_class_percentage = (class_counts.max() / total_rows) * 100
+            
+            if max_class_percentage > 70:
+                rec = ClassImbalanceRecommendation(
+                    type=RecommendationType.CLASS_IMBALANCE,
+                    column_name=col_name,
+                    description=f"Target variable '{col_name}' shows class imbalance ({max_class_percentage:.1f}% majority class).",
+                    majority_percentage=max_class_percentage,
+                    strategy=ImbalanceStrategy.CLASS_WEIGHT
+                )
+                col_recommendations['class_imbalance'] = rec
+        
+        # 7. Suggest binning for numeric columns (e.g., Age)
+        if is_numeric and col_name.lower() in ['age', 'years']:
+            # Use describe() percentiles to suggest bins
+            desc = series.describe()
+            bins = [series.min() - 1, desc['25%'], desc['50%'], desc['75%'], series.max()]
+            labels = ['Low', 'Medium-Low', 'Medium-High', 'High']
+            
+            rec = BinningRecommendation(
+                type=RecommendationType.BINNING,
+                column_name=col_name,
+                description=f"Column '{col_name}' could be binned into {len(labels)} categories.",
+                bins=bins,
+                labels=labels
+            )
+            col_recommendations['binning'] = rec
+        
+        if col_recommendations:
+            recommendations[col_name] = col_recommendations
+    
+    return recommendations
+
+
 def analyze_column_data(
     series: pd.Series,
     dataframe_column: DataframeColumn
@@ -214,18 +409,27 @@ Max value:          {series.max()}"""
         print(object_analysis)
 
 
-def analyze_dataset(df: pd.DataFrame):
+def analyze_dataset(
+    df: pd.DataFrame,
+    target_column: str | None = None,
+    generate_recs: bool = False
+) -> tuple[DataframeInfo, dict[str, dict[str, Recommendation]] | None]:
     """Perform comprehensive analysis of all columns in a DataFrame.
 
     Displays overall DataFrame information (row count, duplicates) followed by
     detailed analysis of each column including data types, null counts, unique
-    values, and type-specific statistics.
+    values, and type-specific statistics. Optionally generates data preparation
+    recommendations.
 
     Args:
         df (pd.DataFrame): The DataFrame to analyze.
+        target_column (str | None): Name of the target column (for recommendation generation).
+        generate_recs (bool): Whether to generate recommendations. Default is False.
 
     Returns:
-        DataframeInfo: Object containing structured information about the DataFrame.
+        tuple[DataframeInfo, dict | None]: A tuple containing:
+            - DataframeInfo object with structured DataFrame information
+            - Recommendations dict (or None if generate_recs is False)
 
     Example:
         >>> df = pd.DataFrame({
@@ -233,8 +437,8 @@ def analyze_dataset(df: pd.DataFrame):
         ...     'age': [25, 30, 35],
         ...     'salary': [50000.0, 60000.5, 75000.0]
         ... })
-        >>> info = analyze_dataset(df)
-        # Prints comprehensive analysis of all columns
+        >>> info, recs = analyze_dataset(df, generate_recs=True)
+        # Prints comprehensive analysis of all columns and returns recommendations
     """
     df_info = DataframeInfo(df)
     df_info.info()
@@ -245,4 +449,8 @@ def analyze_dataset(df: pd.DataFrame):
         col = df_info.columns[c]
         analyze_column_data(df[col.name], df_info.columns[c])
 
-    return df_info
+    recommendations = None
+    if generate_recs:
+        recommendations = generate_recommendations(df, target_column)
+
+    return df_info, recommendations
