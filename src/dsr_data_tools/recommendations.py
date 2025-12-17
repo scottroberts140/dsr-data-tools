@@ -440,29 +440,42 @@ def create_recommendation(
 
 
 def apply_recommendations(
-    df: pd.DataFrame, 
-    recommendations: dict[str, Recommendation]
+    df: pd.DataFrame,
+    recommendations: dict[str, dict[str, Recommendation] | Recommendation]
 ) -> pd.DataFrame:
     """
     Apply all recommendations from a dictionary to a DataFrame.
+
+    Handles both flat dictionaries (column_name -> Recommendation) and nested
+    dictionaries (column_name -> recommendation_type -> Recommendation).
 
     Applies each recommendation sequentially, with each subsequent 
     recommendation working on the output of the previous one.
 
     Args:
         df: Input DataFrame
-        recommendations: Dictionary mapping column names to Recommendation objects
+        recommendations: Dictionary mapping column names to Recommendation objects.
+            Can be flat (str -> Recommendation) or nested (str -> dict -> Recommendation).
 
     Returns:
         DataFrame with all recommendations applied
     """
     result_df = df.copy()
     
-    for column_name, recommendation in recommendations.items():
-        try:
-            result_df = recommendation.apply(result_df)
-        except Exception as e:
-            print(f"Warning: Failed to apply {recommendation.type.value} "
-                  f"recommendation for '{column_name}': {str(e)}")
-    
-    return result_df
+    for column_name, value in recommendations.items():
+        # Handle nested dictionary structure
+        if isinstance(value, dict):
+            for rec_type, recommendation in value.items():
+                try:
+                    result_df = recommendation.apply(result_df)
+                except Exception as e:
+                    print(f"Warning: Failed to apply {recommendation.type.value} "
+                          f"recommendation for '{column_name}': {str(e)}")
+        # Handle flat dictionary structure
+        else:
+            recommendation = value
+            try:
+                result_df = recommendation.apply(result_df)
+            except Exception as e:
+                print(f"Warning: Failed to apply {recommendation.type.value} "
+                      f"recommendation for '{column_name}': {str(e)}")
