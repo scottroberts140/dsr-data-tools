@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+from collections.abc import Mapping
 
 import pandas as pd
 
@@ -447,7 +448,8 @@ def create_recommendation(
 
 def apply_recommendations(
     df: pd.DataFrame,
-    recommendations: dict[str, dict[str, Recommendation] | Recommendation] | None
+    recommendations: Mapping[str, Mapping[str, Recommendation]
+                             | Recommendation] | None
 ) -> pd.DataFrame:
     """
     Apply all recommendations from a dictionary to a DataFrame.
@@ -461,15 +463,15 @@ def apply_recommendations(
 
     Args:
         df: Input DataFrame
-        recommendations: Dictionary mapping column names to Recommendation objects.
-            Can be flat (str -> Recommendation) or nested (str -> dict -> Recommendation),
+        recommendations: Mapping of column names to Recommendation objects.
+            Can be flat (str -> Recommendation) or nested (str -> Mapping -> Recommendation),
             or None to skip applying recommendations.
 
     Returns:
         DataFrame with all recommendations applied
     """
     result_df = df.copy()
-    
+
     # Handle None case
     if recommendations is None:
         return result_df
