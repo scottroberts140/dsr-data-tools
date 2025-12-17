@@ -184,8 +184,11 @@ class EncodingRecommendation(Recommendation):
             le = LabelEncoder()
             # Handle potential NaN values
             mask = result[self.column_name].notna()
-            result.loc[mask, self.column_name] = le.fit_transform(
+            encoded_values = le.fit_transform(
                 result.loc[mask, self.column_name].astype(str))
+            # Convert column to int64 to avoid dtype incompatibility
+            result[self.column_name] = result[self.column_name].astype('int64')
+            result.loc[mask, self.column_name] = encoded_values
 
         elif self.encoder_type == EncodingStrategy.ORDINAL:
             # Ordinal encode - preserves order
