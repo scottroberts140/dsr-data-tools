@@ -281,7 +281,8 @@ class OutlierDetectionRecommendation(Recommendation):
             scaled_values = scaler.fit_transform(
                 result.loc[mask, [self.column_name]])
             # Convert to float64 to avoid dtype incompatibility
-            result[self.column_name] = result[self.column_name].astype('float64')
+            result[self.column_name] = result[self.column_name].astype(
+                'float64')
             result.loc[mask, self.column_name] = scaled_values.flatten()
 
         elif self.strategy == OutlierStrategy.ROBUST_SCALER:
@@ -292,7 +293,8 @@ class OutlierDetectionRecommendation(Recommendation):
             scaled_values = scaler.fit_transform(
                 result.loc[mask, [self.column_name]])
             # Convert to float64 to avoid dtype incompatibility
-            result[self.column_name] = result[self.column_name].astype('float64')
+            result[self.column_name] = result[self.column_name].astype(
+                'float64')
             result.loc[mask, self.column_name] = scaled_values.flatten()
 
         elif self.strategy == OutlierStrategy.REMOVE:
@@ -445,13 +447,14 @@ def create_recommendation(
 
 def apply_recommendations(
     df: pd.DataFrame,
-    recommendations: dict[str, dict[str, Recommendation] | Recommendation]
+    recommendations: dict[str, dict[str, Recommendation] | Recommendation] | None
 ) -> pd.DataFrame:
     """
     Apply all recommendations from a dictionary to a DataFrame.
 
     Handles both flat dictionaries (column_name -> Recommendation) and nested
     dictionaries (column_name -> recommendation_type -> Recommendation).
+    If recommendations is None, returns the DataFrame unchanged.
 
     Applies each recommendation sequentially, with each subsequent 
     recommendation working on the output of the previous one.
@@ -459,12 +462,17 @@ def apply_recommendations(
     Args:
         df: Input DataFrame
         recommendations: Dictionary mapping column names to Recommendation objects.
-            Can be flat (str -> Recommendation) or nested (str -> dict -> Recommendation).
+            Can be flat (str -> Recommendation) or nested (str -> dict -> Recommendation),
+            or None to skip applying recommendations.
 
     Returns:
         DataFrame with all recommendations applied
     """
     result_df = df.copy()
+    
+    # Handle None case
+    if recommendations is None:
+        return result_df
 
     for column_name, value in recommendations.items():
         # Handle nested dictionary structure
@@ -482,5 +490,5 @@ def apply_recommendations(
                 result_df = recommendation.apply(result_df)
             except Exception as e:
                 print(f"Warning: Failed to apply {recommendation.type.value} "
-                      f"recommendation for '{column_name}': {str(e)}")    
+                      f"recommendation for '{column_name}': {str(e)}")
     return result_df
