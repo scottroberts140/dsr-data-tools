@@ -468,7 +468,7 @@ def apply_recommendations(
     recommendation working on the output of the previous one.
 
     Args:
-        df: Input DataFrame
+        df: Input DataFrame. Should be the ORIGINAL, untransformed DataFrame.
         recommendations: Mapping of column names to Recommendation objects.
             Can be flat (str -> Recommendation) or nested (str -> Mapping -> Recommendation),
             or None to skip applying recommendations.
@@ -477,6 +477,25 @@ def apply_recommendations(
 
     Returns:
         DataFrame with all recommendations applied (except excluded types)
+
+    Warning:
+        Only apply this function to the original, untransformed DataFrame. Applying
+        recommendations to an already-transformed DataFrame can cause errors or unexpected
+        behavior, as some transformations (e.g., dropping columns, encoding) cannot be
+        safely applied multiple times.
+
+        For multiple analysis phases with different recommendation sets, always apply
+        recommendations to the original DataFrame:
+
+        Example:
+            >>> # CORRECT: Each phase starts from the original DataFrame
+            >>> df_baseline = ddt.apply_recommendations(df_original, recs,
+            ...     exclude_types=[ddt.RecommendationType.BINNING])
+            >>> df_with_binning = ddt.apply_recommendations(df_original, recs)
+            >>>
+            >>> # INCORRECT: Applying recommendations to already-transformed data
+            >>> df_v1 = ddt.apply_recommendations(df_original, recs)
+            >>> df_v2 = ddt.apply_recommendations(df_v1, recs)  # Don't do this!
 
     Example:
         >>> # Apply all recommendations except binning
