@@ -8,12 +8,14 @@ from dsr_data_tools.analysis import (
     analyze_column_data,
     analyze_dataset,
 )
+from dsr_data_tools.recommendations import apply_recommendations
 
 __all__ = [
     "DataframeColumn",
     "DataframeInfo",
     "analyze_column_data",
     "analyze_dataset",
+    "apply_recommendations",
 ]
 
 __version__ = "0.0.1"
