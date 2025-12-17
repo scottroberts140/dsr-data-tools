@@ -224,8 +224,8 @@ def generate_recommendations(
             recommendations[col_name] = col_recommendations
             continue
 
-        # Non-informative: high cardinality object type (> 40% unique values)
-        if not is_numeric and unique_count > total_rows * 0.4:
+        # Non-informative: high cardinality object type (> 25% unique values)
+        if not is_numeric and unique_count > total_rows * 0.25:
             rec = NonInformativeRecommendation(
                 type=RecommendationType.NON_INFORMATIVE,
                 column_name=col_name,
