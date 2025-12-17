@@ -186,9 +186,10 @@ class EncodingRecommendation(Recommendation):
             mask = result[self.column_name].notna()
             encoded_values = le.fit_transform(
                 result.loc[mask, self.column_name].astype(str))
-            # Convert column to int64 to avoid dtype incompatibility
-            result[self.column_name] = result[self.column_name].astype('int64')
-            result.loc[mask, self.column_name] = encoded_values
+            # Create new series with encoded values and NaN for masked rows
+            new_values = pd.Series(index=result.index, dtype='Int64')  # nullable int
+            new_values[mask] = encoded_values
+            result[self.column_name] = new_values
 
         elif self.encoder_type == EncodingStrategy.ORDINAL:
             # Ordinal encode - preserves order
