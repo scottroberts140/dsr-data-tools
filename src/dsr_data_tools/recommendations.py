@@ -39,6 +39,11 @@ class Recommendation(ABC):
         """
         pass
 
+    @abstractmethod
+    def info(self) -> None:
+        """Display formatted information about this recommendation."""
+        pass
+
 
 @dataclass
 class NonInformativeRecommendation(Recommendation):
@@ -62,6 +67,12 @@ class NonInformativeRecommendation(Recommendation):
             DataFrame with column removed
         """
         return df.drop(columns=[self.column_name])
+
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: NON_INFORMATIVE")
+        print(f"    Reason: {self.reason}")
+        print(f"    Action: Drop column '{self.column_name}'")
 
 
 @dataclass
@@ -110,6 +121,23 @@ class MissingValuesRecommendation(Recommendation):
 
         return result
 
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: MISSING_VALUES")
+        print(f"    Missing count: {self.missing_count} ({self.missing_percentage:.2f}%)")
+        print(f"    Strategy: {self.strategy.value}")
+        print(f"    Action: {self._get_strategy_description()}")
+
+    def _get_strategy_description(self) -> str:
+        """Get human-readable description of the strategy."""
+        if self.strategy == MissingValueStrategy.DROP_ROWS:
+            return f"Remove {self.missing_count} rows with missing values"
+        elif self.strategy == MissingValueStrategy.DROP_COLUMN:
+            return f"Drop column '{self.column_name}' entirely"
+        elif self.strategy == MissingValueStrategy.IMPUTE:
+            return "Impute missing values using mean/median/mode"
+        return "Unknown strategy"
+
 
 @dataclass
 class EncodingRecommendation(Recommendation):
@@ -154,6 +182,13 @@ class EncodingRecommendation(Recommendation):
 
         return result
 
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: ENCODING")
+        print(f"    Unique values: {self.unique_values}")
+        print(f"    Encoder type: {self.encoder_type.value}")
+        print(f"    Action: Apply {self.encoder_type.value} encoding to '{self.column_name}'")
+
 
 @dataclass
 class ClassImbalanceRecommendation(Recommendation):
@@ -185,6 +220,13 @@ class ClassImbalanceRecommendation(Recommendation):
         # This recommendation is typically handled at model training time,
         # not during data preparation. Return df unchanged as a placeholder.
         return df
+
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: CLASS_IMBALANCE")
+        print(f"    Majority class: {self.majority_percentage:.2f}%")
+        print(f"    Strategy: {self.strategy.value}")
+        print(f"    Action: Apply {self.strategy.value} during model training")
 
 
 @dataclass
@@ -240,6 +282,13 @@ class OutlierDetectionRecommendation(Recommendation):
 
         return result
 
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: OUTLIER_DETECTION")
+        print(f"    Max value: {self.max_value:.2f}, Mean: {self.mean_value:.2f}")
+        print(f"    Strategy: {self.strategy.value}")
+        print(f"    Action: Apply {self.strategy.value} to handle outliers in '{self.column_name}'")
+
 
 @dataclass
 class BooleanClassificationRecommendation(Recommendation):
@@ -265,6 +314,12 @@ class BooleanClassificationRecommendation(Recommendation):
         result = df.copy()
         result[self.column_name] = result[self.column_name].astype(bool)
         return result
+
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: BOOLEAN_CLASSIFICATION")
+        print(f"    Values: {self.values}")
+        print(f"    Action: Convert '{self.column_name}' to boolean type")
 
 
 @dataclass
@@ -302,6 +357,13 @@ class BinningRecommendation(Recommendation):
         # One-hot encode the binned column
         result = pd.get_dummies(result, columns=[self.column_name])
         return result
+
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: BINNING")
+        print(f"    Bins: {self.bins}")
+        print(f"    Labels: {self.labels}")
+        print(f"    Action: Bin '{self.column_name}' into {len(self.labels)} categories and encode")
 
 
 def create_recommendation(

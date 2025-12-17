@@ -447,12 +447,21 @@ def analyze_dataset(
 
     n = len(df_info.columns)
 
-    for c in range(n):
-        col = df_info.columns[c]
-        analyze_column_data(df[col.name], df_info.columns[c])
-
     recommendations = None
     if generate_recs:
         recommendations = generate_recommendations(df, target_column)
+
+    for c in range(n):
+        col = df_info.columns[c]
+        analyze_column_data(df[col.name], df_info.columns[c])
+        
+        # Display recommendations for this column if available
+        if recommendations and col.name in recommendations:
+            col_recs = recommendations[col.name]
+            if col_recs:
+                print("\n  Recommendations:")
+                for rec_type, recommendation in col_recs.items():
+                    recommendation.info()
+                print()
 
     return df_info, recommendations
