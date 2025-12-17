@@ -177,19 +177,19 @@ def generate_recommendations(
     target_column: str | None = None
 ) -> dict[str, dict[str, Recommendation]]:
     """Generate data preparation recommendations for each column in a DataFrame.
-    
+
     Analyzes each column and generates appropriate recommendations based on
     data characteristics (missing values, cardinality, data type, etc.).
-    
+
     Args:
         df (pd.DataFrame): The DataFrame to analyze.
         target_column (str | None): Name of the target column (for imbalance detection).
             If provided, class imbalance will be analyzed for this column.
-    
+
     Returns:
         dict[str, dict[str, Recommendation]]: Nested dictionary mapping column names
             to recommendation types to Recommendation instances.
-    
+
     Example:
         >>> df = pd.DataFrame({
         ...     'id': range(100),
@@ -202,16 +202,16 @@ def generate_recommendations(
         >>> recs['age']['encoding']  # Binary encoding recommendation
     """
     recommendations: dict[str, dict[str, Recommendation]] = {}
-    
+
     for col_name in df.columns:
         col_recommendations: dict[str, Recommendation] = {}
         series = df[col_name]
-        
+
         # 1. Check for non-informative columns
         unique_count = series.nunique()
         total_rows = len(df)
         is_numeric = pd.api.types.is_numeric_dtype(series)
-        
+
         # Non-informative: unique count equals total rows (e.g., ID column)
         if unique_count == total_rows:
             rec = NonInformativeRecommendation(
@@ -223,7 +223,7 @@ def generate_recommendations(
             col_recommendations['non_informative'] = rec
             recommendations[col_name] = col_recommendations
             continue
-        
+
         # Non-informative: high cardinality object type (> 50% unique values)
         if not is_numeric and unique_count > total_rows * 0.5:
             rec = NonInformativeRecommendation(
@@ -235,12 +235,12 @@ def generate_recommendations(
             col_recommendations['non_informative'] = rec
             recommendations[col_name] = col_recommendations
             continue
-        
+
         # 2. Check for missing values
         missing_count = series.isna().sum()
         if missing_count > 0:
             missing_percentage = (missing_count / total_rows) * 100
-            
+
             # Determine strategy based on percentage
             if missing_percentage < 10:
                 strategy = MissingValueStrategy.DROP_ROWS
@@ -248,7 +248,7 @@ def generate_recommendations(
                 strategy = MissingValueStrategy.DROP_COLUMN
             else:
                 strategy = MissingValueStrategy.IMPUTE
-            
+
             rec = MissingValuesRecommendation(
                 type=RecommendationType.MISSING_VALUES,
                 column_name=col_name,
@@ -258,9 +258,10 @@ def generate_recommendations(
                 strategy=strategy
             )
             col_recommendations['missing_values'] = rec
-        
+
         # 3. Check for boolean classification (exactly 2 unique numeric values)
-        if is_numeric and unique_count == 2:
+        # Skip target column as it should remain numeric for classifiers
+        if is_numeric and unique_count == 2 and col_name != target_column:
             values = sorted(series.dropna().unique().tolist())
             if values == [0.0, 1.0] or values == [0, 1]:
                 rec = BooleanClassificationRecommendation(
@@ -270,7 +271,7 @@ def generate_recommendations(
                     values=values
                 )
                 col_recommendations['boolean_classification'] = rec
-        
+
         # 4. Check for encoding recommendations (categorical columns)
         if not is_numeric and col_name != target_column:
             # Binary categorical: 2 unique values
@@ -283,7 +284,7 @@ def generate_recommendations(
                     unique_values=unique_count
                 )
                 col_recommendations['encoding'] = rec
-            
+
             # Multi-class categorical: 3-10 unique values
             elif 3 <= unique_count <= 10:
                 rec = EncodingRecommendation(
@@ -294,13 +295,13 @@ def generate_recommendations(
                     unique_values=unique_count
                 )
                 col_recommendations['encoding'] = rec
-        
+
         # 5. Check for outliers (numeric columns)
         if is_numeric:
             mean_value = series.mean()
             max_value = series.max()
             min_value = series.min()
-            
+
             # Check if max value significantly exceeds mean (potential outliers)
             if max_value > mean_value * 2:  # Max is more than 2x the mean
                 rec = OutlierDetectionRecommendation(
@@ -312,12 +313,12 @@ def generate_recommendations(
                     mean_value=mean_value
                 )
                 col_recommendations['outlier_detection'] = rec
-        
+
         # 6. Check for class imbalance (target column)
         if col_name == target_column and unique_count <= 2:
             class_counts = series.value_counts()
             max_class_percentage = (class_counts.max() / total_rows) * 100
-            
+
             if max_class_percentage > 70:
                 rec = ClassImbalanceRecommendation(
                     type=RecommendationType.CLASS_IMBALANCE,
@@ -327,14 +328,15 @@ def generate_recommendations(
                     strategy=ImbalanceStrategy.CLASS_WEIGHT
                 )
                 col_recommendations['class_imbalance'] = rec
-        
+
         # 7. Suggest binning for numeric columns (e.g., Age)
         if is_numeric and col_name.lower() in ['age', 'years']:
             # Use describe() percentiles to suggest bins
             desc = series.describe()
-            bins = [series.min() - 1, desc['25%'], desc['50%'], desc['75%'], series.max()]
+            bins = [series.min() - 1, desc['25%'], desc['50%'],
+                    desc['75%'], series.max()]
             labels = ['Low', 'Medium-Low', 'Medium-High', 'High']
-            
+
             rec = BinningRecommendation(
                 type=RecommendationType.BINNING,
                 column_name=col_name,
@@ -343,10 +345,10 @@ def generate_recommendations(
                 labels=labels
             )
             col_recommendations['binning'] = rec
-        
+
         if col_recommendations:
             recommendations[col_name] = col_recommendations
-    
+
     return recommendations
 
 
