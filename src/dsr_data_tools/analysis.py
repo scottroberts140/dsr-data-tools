@@ -335,7 +335,7 @@ def generate_recommendations(
             desc = series.describe()
             bins = [series.min() - 1, desc['25%'], desc['50%'],
                     desc['75%'], series.max()]
-            labels = ['Low', 'Medium-Low', 'Medium-High', 'High']
+            labels = ['Low', 'Medium_Low', 'Medium_High', 'High']
 
             rec = BinningRecommendation(
                 type=RecommendationType.BINNING,
