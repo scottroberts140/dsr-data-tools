@@ -280,7 +280,9 @@ class OutlierDetectionRecommendation(Recommendation):
             mask = result[self.column_name].notna()
             scaled_values = scaler.fit_transform(
                 result.loc[mask, [self.column_name]])
-            result.loc[mask, self.column_name] = scaled_values
+            # Convert to float64 to avoid dtype incompatibility
+            result[self.column_name] = result[self.column_name].astype('float64')
+            result.loc[mask, self.column_name] = scaled_values.flatten()
 
         elif self.strategy == OutlierStrategy.ROBUST_SCALER:
             from sklearn.preprocessing import RobustScaler
@@ -289,7 +291,9 @@ class OutlierDetectionRecommendation(Recommendation):
             mask = result[self.column_name].notna()
             scaled_values = scaler.fit_transform(
                 result.loc[mask, [self.column_name]])
-            result.loc[mask, self.column_name] = scaled_values
+            # Convert to float64 to avoid dtype incompatibility
+            result[self.column_name] = result[self.column_name].astype('float64')
+            result.loc[mask, self.column_name] = scaled_values.flatten()
 
         elif self.strategy == OutlierStrategy.REMOVE:
             # Remove rows where value exceeds 1.5 * IQR beyond quartiles
@@ -461,7 +465,7 @@ def apply_recommendations(
         DataFrame with all recommendations applied
     """
     result_df = df.copy()
-    
+
     for column_name, value in recommendations.items():
         # Handle nested dictionary structure
         if isinstance(value, dict):
@@ -478,4 +482,5 @@ def apply_recommendations(
                 result_df = recommendation.apply(result_df)
             except Exception as e:
                 print(f"Warning: Failed to apply {recommendation.type.value} "
-                      f"recommendation for '{column_name}': {str(e)}")
+                      f"recommendation for '{column_name}': {str(e)}")    
+    return result_df
