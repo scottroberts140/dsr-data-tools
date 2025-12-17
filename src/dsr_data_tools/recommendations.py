@@ -454,7 +454,8 @@ def create_recommendation(
 def apply_recommendations(
     df: pd.DataFrame,
     recommendations: Mapping[str, Mapping[str, Recommendation]
-                             | Recommendation] | None
+                             | Recommendation] | None,
+    exclude_types: list[RecommendationType] | None = None
 ) -> pd.DataFrame:
     """
     Apply all recommendations from a dictionary to a DataFrame.
@@ -471,9 +472,15 @@ def apply_recommendations(
         recommendations: Mapping of column names to Recommendation objects.
             Can be flat (str -> Recommendation) or nested (str -> Mapping -> Recommendation),
             or None to skip applying recommendations.
+        exclude_types: Optional list of RecommendationType values to exclude from being applied.
+            For example, [RecommendationType.BINNING] would skip binning recommendations.
 
     Returns:
-        DataFrame with all recommendations applied
+        DataFrame with all recommendations applied (except excluded types)
+
+    Example:
+        >>> # Apply all recommendations except binning
+        >>> result_df = apply_recommendations(df, recs, exclude_types=[RecommendationType.BINNING])
     """
     result_df = df.copy()
 
@@ -481,10 +488,17 @@ def apply_recommendations(
     if recommendations is None:
         return result_df
 
+    # Default to empty list if not provided
+    if exclude_types is None:
+        exclude_types = []
+
     for column_name, value in recommendations.items():
         # Handle nested dictionary structure
         if isinstance(value, dict):
             for rec_type, recommendation in value.items():
+                # Skip excluded recommendation types
+                if recommendation.type in exclude_types:
+                    continue
                 try:
                     result_df = recommendation.apply(result_df)
                 except Exception as e:
@@ -493,6 +507,9 @@ def apply_recommendations(
         # Handle flat dictionary structure
         else:
             recommendation = value
+            # Skip excluded recommendation types
+            if recommendation.type in exclude_types:
+                continue
             try:
                 result_df = recommendation.apply(result_df)
             except Exception as e:
