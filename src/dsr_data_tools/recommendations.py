@@ -455,7 +455,8 @@ def apply_recommendations(
     df: pd.DataFrame,
     recommendations: Mapping[str, Mapping[str, Recommendation]
                              | Recommendation] | None,
-    exclude_types: list[RecommendationType] | None = None
+    exclude_types: list[RecommendationType] | None = None,
+    target_column: str | None = None
 ) -> pd.DataFrame:
     """
     Apply all recommendations from a dictionary to a DataFrame.
@@ -474,6 +475,9 @@ def apply_recommendations(
             or None to skip applying recommendations.
         exclude_types: Optional list of RecommendationType values to exclude from being applied.
             For example, [RecommendationType.BINNING] would skip binning recommendations.
+        target_column: Optional name of the target column. If provided, no recommendations
+            will be applied to this column to preserve its discrete class values for
+            classification tasks.
 
     Returns:
         DataFrame with all recommendations applied (except excluded types)
@@ -490,16 +494,17 @@ def apply_recommendations(
         Example:
             >>> # CORRECT: Each phase starts from the original DataFrame
             >>> df_baseline = ddt.apply_recommendations(df_original, recs,
-            ...     exclude_types=[ddt.RecommendationType.BINNING])
-            >>> df_with_binning = ddt.apply_recommendations(df_original, recs)
+            ...     exclude_types=[ddt.RecommendationType.BINNING], target_column='Exited')
+            >>> df_with_binning = ddt.apply_recommendations(df_original, recs, target_column='Exited')
             >>>
             >>> # INCORRECT: Applying recommendations to already-transformed data
-            >>> df_v1 = ddt.apply_recommendations(df_original, recs)
-            >>> df_v2 = ddt.apply_recommendations(df_v1, recs)  # Don't do this!
+            >>> df_v1 = ddt.apply_recommendations(df_original, recs, target_column='Exited')
+            >>> df_v2 = ddt.apply_recommendations(df_v1, recs, target_column='Exited')  # Don't do this!
 
     Example:
-        >>> # Apply all recommendations except binning
-        >>> result_df = apply_recommendations(df, recs, exclude_types=[RecommendationType.BINNING])
+        >>> # Apply all recommendations except binning, preserving target column
+        >>> result_df = apply_recommendations(df, recs, exclude_types=[RecommendationType.BINNING],
+        ...     target_column='target')
     """
     result_df = df.copy()
 
@@ -512,6 +517,10 @@ def apply_recommendations(
         exclude_types = []
 
     for column_name, value in recommendations.items():
+        # Skip target column to preserve discrete class values
+        if target_column is not None and column_name == target_column:
+            continue
+            
         # Handle nested dictionary structure
         if isinstance(value, dict):
             for rec_type, recommendation in value.items():
