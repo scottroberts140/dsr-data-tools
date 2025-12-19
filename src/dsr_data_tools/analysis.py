@@ -1,4 +1,16 @@
 from __future__ import annotations
+from dsr_data_tools.recommendations import (
+    Recommendation,
+    NonInformativeRecommendation,
+    MissingValuesRecommendation,
+    EncodingRecommendation,
+    ClassImbalanceRecommendation,
+    OutlierDetectionRecommendation,
+    BooleanClassificationRecommendation,
+    BinningRecommendation,
+    IntegerConversionRecommendation,
+    DecimalPrecisionRecommendation,
+)
 import pandas as pd
 from typing import Type
 from dsr_utils import strings
@@ -13,16 +25,16 @@ from dsr_data_tools.enums import (
 
 def _to_snake_case(name: str) -> str:
     """Convert a string to snake_case format.
-    
+
     Handles various input formats including PascalCase, camelCase, spaces, 
     hyphens, and mixed separators.
-    
+
     Args:
         name (str): The column name to convert.
-        
+
     Returns:
         str: The column name in snake_case format.
-        
+
     Example:
         >>> _to_snake_case('FirstName')
         'first_name'
@@ -32,36 +44,24 @@ def _to_snake_case(name: str) -> str:
         'first_name'
     """
     import re
-    
+
     # Replace hyphens and spaces with underscores
     name = name.replace('-', '_').replace(' ', '_')
-    
+
     # Insert underscore before uppercase letters (for camelCase and PascalCase)
     # But avoid multiple underscores and handle consecutive capitals
     name = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
-    
+
     # Convert to lowercase
     name = name.lower()
-    
+
     # Remove any duplicate underscores
     name = re.sub(r'_+', '_', name)
-    
+
     # Strip leading/trailing underscores
     name = name.strip('_')
-    
+
     return name
-from dsr_data_tools.recommendations import (
-    Recommendation,
-    NonInformativeRecommendation,
-    MissingValuesRecommendation,
-    EncodingRecommendation,
-    ClassImbalanceRecommendation,
-    OutlierDetectionRecommendation,
-    BooleanClassificationRecommendation,
-    BinningRecommendation,
-    IntegerConversionRecommendation,
-    DecimalPrecisionRecommendation,
-)
 
 
 class DataframeColumn:
@@ -575,7 +575,7 @@ def analyze_dataset(
         # Update target_column name if it exists
         if target_column is not None:
             target_column = _to_snake_case(target_column)
-    
+
     df_info = DataframeInfo(df)
     df_info.info()
 

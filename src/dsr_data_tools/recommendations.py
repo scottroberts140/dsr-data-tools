@@ -78,7 +78,10 @@ class NonInformativeRecommendation(Recommendation):
 
 @dataclass
 class MissingValuesRecommendation(Recommendation):
-    """Recommendation for handling missing values."""
+    """Recommendation for handling missing values with editable strategy.
+    
+    The strategy and fill_value are editable before applying the recommendation.
+    """
 
     missing_count: int
     """Number of missing values in the column"""
@@ -87,7 +90,10 @@ class MissingValuesRecommendation(Recommendation):
     """Percentage of missing values (0-100)"""
 
     strategy: MissingValueStrategy
-    """Recommended strategy for handling missing values"""
+    """Strategy for handling missing values (EDITABLE before apply)"""
+
+    fill_value: str | int | float | None = None
+    """Fill value for FILL_VALUE strategy. Only used when strategy=FILL_VALUE (EDITABLE)"""
 
     def __post_init__(self):
         """Set type to MISSING_VALUES."""
@@ -126,25 +132,37 @@ class MissingValuesRecommendation(Recommendation):
                     result[self.column_name] = result[self.column_name].fillna(
                         'Unknown')
 
+        elif self.strategy == MissingValueStrategy.FILL_VALUE:
+            if self.fill_value is not None:
+                result[self.column_name] = result[self.column_name].fillna(
+                    self.fill_value)
+
+        # MissingValueStrategy.LEAVE_AS_NA: Do nothing
+        
         return result
 
     def info(self) -> None:
-        """Display recommendation information."""
-        print(f"  Recommendation: MISSING_VALUES")
-        print(
-            f"    Missing count: {self.missing_count} ({self.missing_percentage:.2f}%)")
-        print(f"    Strategy: {self.strategy.value}")
-        print(f"    Action: {self._get_strategy_description()}")
+        """Display recommendation information including editable parameters."""
+        print(f"  Recommendation: {self.type.name}")
+        print(f"    Missing count: {self.missing_count} ({self.missing_percentage:.1f}%)")
+        print(f"    Strategy: {self.strategy.value} (EDITABLE)")
+        if self.strategy == MissingValueStrategy.FILL_VALUE:
+            print(f"    Fill value: {self.fill_value} (EDITABLE)")
+        print(f"    Action: {self._get_action_description()}")
 
-    def _get_strategy_description(self) -> str:
-        """Get human-readable description of the strategy."""
+    def _get_action_description(self) -> str:
+        """Get a human-readable description of the action."""
         if self.strategy == MissingValueStrategy.DROP_ROWS:
             return f"Remove {self.missing_count} rows with missing values"
         elif self.strategy == MissingValueStrategy.DROP_COLUMN:
             return f"Drop column '{self.column_name}' entirely"
         elif self.strategy == MissingValueStrategy.IMPUTE:
-            return "Impute missing values using mean/median/mode"
-        return "Unknown strategy"
+            return f"Impute missing values using mean/median/mode"
+        elif self.strategy == MissingValueStrategy.FILL_VALUE:
+            return f"Fill missing values with: {self.fill_value}"
+        elif self.strategy == MissingValueStrategy.LEAVE_AS_NA:
+            return f"Leave {self.missing_count} missing values as-is"
+        return ""
 
 
 @dataclass

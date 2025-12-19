@@ -57,6 +57,12 @@ class MissingValueStrategy(Enum):
     DROP_COLUMN = "drop_column"
     """Remove the column entirely"""
 
+    FILL_VALUE = "fill_value"
+    """Fill missing values with a specified value"""
+
+    LEAVE_AS_NA = "leave_as_na"
+    """Leave missing values as-is (no action taken)"""
+
 
 class OutlierStrategy(Enum):
     """Strategies for handling outliers."""
