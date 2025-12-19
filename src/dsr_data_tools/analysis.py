@@ -469,7 +469,8 @@ Unique values:      {series.nunique()}
 def analyze_dataset(
     df: pd.DataFrame,
     target_column: str | None = None,
-    generate_recs: bool = False
+    generate_recs: bool = False,
+    max_decimal_places: int | None = None
 ) -> tuple[DataframeInfo, dict[str, dict[str, Recommendation]] | None]:
     """Perform comprehensive analysis of all columns in a DataFrame.
 
@@ -482,6 +483,8 @@ def analyze_dataset(
         df (pd.DataFrame): The DataFrame to analyze.
         target_column (str | None): Name of the target column (for recommendation generation).
         generate_recs (bool): Whether to generate recommendations. Default is False.
+        max_decimal_places (int | None): Maximum decimal places for precision optimization.
+            If provided, float columns will be checked for decimal precision optimization.
 
     Returns:
         tuple[DataframeInfo, dict | None]: A tuple containing:
@@ -504,7 +507,7 @@ def analyze_dataset(
 
     recommendations = None
     if generate_recs:
-        recommendations = generate_recommendations(df, target_column)
+        recommendations = generate_recommendations(df, target_column, max_decimal_places)
 
     for c in range(n):
         col = df_info.columns[c]
