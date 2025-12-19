@@ -9,6 +9,47 @@ from dsr_data_tools.enums import (
     OutlierStrategy,
     ImbalanceStrategy,
 )
+
+
+def _to_snake_case(name: str) -> str:
+    """Convert a string to snake_case format.
+    
+    Handles various input formats including PascalCase, camelCase, spaces, 
+    hyphens, and mixed separators.
+    
+    Args:
+        name (str): The column name to convert.
+        
+    Returns:
+        str: The column name in snake_case format.
+        
+    Example:
+        >>> _to_snake_case('FirstName')
+        'first_name'
+        >>> _to_snake_case('first-name')
+        'first_name'
+        >>> _to_snake_case('FIRST_NAME')
+        'first_name'
+    """
+    import re
+    
+    # Replace hyphens and spaces with underscores
+    name = name.replace('-', '_').replace(' ', '_')
+    
+    # Insert underscore before uppercase letters (for camelCase and PascalCase)
+    # But avoid multiple underscores and handle consecutive capitals
+    name = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
+    
+    # Convert to lowercase
+    name = name.lower()
+    
+    # Remove any duplicate underscores
+    name = re.sub(r'_+', '_', name)
+    
+    # Strip leading/trailing underscores
+    name = name.strip('_')
+    
+    return name
 from dsr_data_tools.recommendations import (
     Recommendation,
     NonInformativeRecommendation,
@@ -303,20 +344,22 @@ def generate_recommendations(
         if max_decimal_places is not None and series.dtype == 'float64':
             # Determine the max_decimal_places value for this column
             col_max_decimal_places: int | None = None
-            
+
             if isinstance(max_decimal_places, dict):
                 # If dict, check if column has specific value; otherwise use default
-                col_max_decimal_places = max_decimal_places.get(col_name, default_max_decimal_places)
+                col_max_decimal_places = max_decimal_places.get(
+                    col_name, default_max_decimal_places)
             else:
                 # If int, use it directly
                 col_max_decimal_places = max_decimal_places
-            
+
             # Skip if already recommended for int64 conversion or no valid precision specified
             if col_max_decimal_places is not None and 'int64_conversion' not in col_recommendations:
                 non_null_series = series.dropna()
                 if len(non_null_series) > 0:
                     # Check if rounding to col_max_decimal_places would lose significant data
-                    rounded_series = non_null_series.round(col_max_decimal_places)
+                    rounded_series = non_null_series.round(
+                        col_max_decimal_places)
 
                     # Determine if conversion to int64 is possible (all values are integers after rounding)
                     can_convert_to_int = (
@@ -487,7 +530,8 @@ def analyze_dataset(
     target_column: str | None = None,
     generate_recs: bool = False,
     max_decimal_places: int | dict[str, int] | None = None,
-    default_max_decimal_places: int | None = None
+    default_max_decimal_places: int | None = None,
+    normalize_column_names: bool = False
 ) -> tuple[DataframeInfo, dict[str, dict[str, Recommendation]] | None]:
     """Perform comprehensive analysis of all columns in a DataFrame.
 
@@ -506,6 +550,8 @@ def analyze_dataset(
             decimal precision optimization.
         default_max_decimal_places (int | None): Default max decimal places to use for columns
             not in the max_decimal_places dict. Only used if max_decimal_places is a dict.
+        normalize_column_names (bool): Whether to convert column names to snake_case. Default is False.
+            If True, column names are converted at the start (before analysis and recommendations).
 
     Returns:
         tuple[DataframeInfo, dict | None]: A tuple containing:
@@ -514,13 +560,22 @@ def analyze_dataset(
 
     Example:
         >>> df = pd.DataFrame({
-        ...     'name': ['Alice', 'Bob', 'Charlie'],
-        ...     'age': [25, 30, 35],
-        ...     'salary': [50000.0, 60000.5, 75000.0]
+        ...     'FirstName': ['Alice', 'Bob', 'Charlie'],
+        ...     'Age': [25, 30, 35],
+        ...     'Salary': [50000.0, 60000.5, 75000.0]
         ... })
-        >>> info, recs = analyze_dataset(df, generate_recs=True)
+        >>> info, recs = analyze_dataset(df, generate_recs=True, normalize_column_names=True)
+        # Converts FirstName -> first_name, Age -> age, Salary -> salary
         # Prints comprehensive analysis of all columns and returns recommendations
     """
+    # Normalize column names if requested
+    if normalize_column_names:
+        df = df.copy()  # Avoid modifying original DataFrame
+        df.columns = [_to_snake_case(col) for col in df.columns]
+        # Update target_column name if it exists
+        if target_column is not None:
+            target_column = _to_snake_case(target_column)
+    
     df_info = DataframeInfo(df)
     df_info.info()
 
