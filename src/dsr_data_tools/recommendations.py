@@ -408,6 +408,46 @@ class BinningRecommendation(Recommendation):
             f"    Action: Bin '{self.column_name}' into {len(self.labels)} categories and encode")
 
 
+@dataclass
+class IntegerConversionRecommendation(Recommendation):
+    """Recommendation to convert float64 column with only integer values to int64."""
+
+    integer_count: int
+    """Number of integer values in the column"""
+
+    def __post_init__(self):
+        """Set type to INT64_CONVERSION."""
+        self.type = RecommendationType.INT64_CONVERSION
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert the float64 column to int64.
+
+        Args:
+            df: Input DataFrame
+
+        Returns:
+            DataFrame with column converted to int64
+        """
+        result = df.copy()
+        try:
+            # Handle NaN values by converting to Int64 (nullable integer type)
+            if result[self.column_name].isna().any():
+                result[self.column_name] = result[self.column_name].astype('Int64')
+            else:
+                result[self.column_name] = result[self.column_name].astype('int64')
+        except Exception as e:
+            print(f"Warning: Could not convert column '{self.column_name}' to int64: {e}")
+            return result
+        return result
+
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: INT64_CONVERSION")
+        print(f"    Integer values: {self.integer_count}")
+        print(f"    Action: Convert '{self.column_name}' from float64 to int64")
+
+
 def create_recommendation(
     rec_type: RecommendationType,
     column_name: str,
@@ -520,7 +560,7 @@ def apply_recommendations(
         # Skip target column to preserve discrete class values
         if target_column is not None and column_name == target_column:
             continue
-            
+
         # Handle nested dictionary structure
         if isinstance(value, dict):
             for rec_type, recommendation in value.items():

@@ -18,6 +18,7 @@ from dsr_data_tools.recommendations import (
     OutlierDetectionRecommendation,
     BooleanClassificationRecommendation,
     BinningRecommendation,
+    IntegerConversionRecommendation,
 )
 
 
@@ -272,6 +273,21 @@ def generate_recommendations(
                 )
                 col_recommendations['boolean_classification'] = rec
 
+        # 3.5. Check for int64 conversion (float64 with all integer values)
+        # Only check if column is float64 and has no non-integer values
+        if series.dtype == 'float64':
+            non_null_series = series.dropna()
+            if len(non_null_series) > 0:
+                integer_count = non_null_series.apply(lambda x: x.is_integer()).sum()
+                if integer_count == len(non_null_series):
+                    rec = IntegerConversionRecommendation(
+                        type=RecommendationType.INT64_CONVERSION,
+                        column_name=col_name,
+                        description=f"Column '{col_name}' is float64 with only integer values; should be int64.",
+                        integer_count=integer_count
+                    )
+                    col_recommendations['int64_conversion'] = rec
+
         # 4. Check for encoding recommendations (categorical columns)
         if not is_numeric and col_name != target_column:
             # Binary categorical: 2 unique values
@@ -393,14 +409,21 @@ Non-integer values: {non_integer_value_count}"""
         object_analysis = f"""Numeric values:     {numeric_value_count}
 Non-numeric values: {non_numeric_value_count}"""
 
+    # Build analysis string, only including min/max for numeric types
+    min_max_str = ""
+    is_numeric_type = is_float_type or (dataframe_column.data_type.name in [
+                                        'int64', 'int32', 'int16', 'int8'])
+    if is_numeric_type:
+        min_max_str = f"""Min value:          {series.min()}
+Max value:          {series.max()}"""
+
     analysis = f"""
 Column:             {dataframe_column.name}
 Data type:          {dataframe_column.data_type.name}
 Non-null:           {dataframe_column.non_null_count}
 N/A count:          {series.isna().sum()}
 Unique values:      {series.nunique()}
-Min value:          {series.min()}
-Max value:          {series.max()}"""
+{min_max_str}"""
 
     print(analysis)
 

@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: dsr-data-tools
-Version: 0.0.1
+Version: 0.0.2
 Summary: Generic data handling utilities including data splitting and analysis.
 Author-email: Scott Roberts <scottrdeveloper@gmail.com>
 License: MIT

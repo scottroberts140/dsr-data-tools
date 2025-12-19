@@ -25,6 +25,9 @@ class RecommendationType(Enum):
     BINNING = "binning"
     """Numeric column should be binned into categorical ranges"""
 
+    INT64_CONVERSION = "int64_conversion"
+    """Float column with only integer values should be converted to int64"""
+
 
 class EncodingStrategy(Enum):
     """Strategies for encoding categorical columns."""
