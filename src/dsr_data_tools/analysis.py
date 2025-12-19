@@ -177,7 +177,8 @@ class DataframeInfo:
 def generate_recommendations(
     df: pd.DataFrame,
     target_column: str | None = None,
-    max_decimal_places: int | None = None
+    max_decimal_places: int | dict[str, int] | None = None,
+    default_max_decimal_places: int | None = None
 ) -> dict[str, dict[str, Recommendation]]:
     """Generate data preparation recommendations for each column in a DataFrame.
 
@@ -188,8 +189,12 @@ def generate_recommendations(
         df (pd.DataFrame): The DataFrame to analyze.
         target_column (str | None): Name of the target column (for imbalance detection).
             If provided, class imbalance will be analyzed for this column.
-        max_decimal_places (int | None): Maximum decimal places for precision optimization.
-            If provided, float columns will be checked for decimal precision optimization.
+        max_decimal_places (int | dict | None): Maximum decimal places for precision optimization.
+            Can be an int (applies to all float columns) or dict mapping column names to their
+            specific max decimal places. If provided, float columns will be checked for
+            decimal precision optimization.
+        default_max_decimal_places (int | None): Default max decimal places to use for columns
+            not in the max_decimal_places dict. Only used if max_decimal_places is a dict.
 
     Returns:
         dict[str, dict[str, Recommendation]]: Nested dictionary mapping column names
@@ -296,24 +301,35 @@ def generate_recommendations(
         # 3.6. Check for decimal precision optimization (float columns with user-specified max precision)
         # Only if max_decimal_places is provided and column is numeric float type
         if max_decimal_places is not None and series.dtype == 'float64':
-            # Skip if already recommended for int64 conversion
-            if 'int64_conversion' not in col_recommendations:
+            # Determine the max_decimal_places value for this column
+            col_max_decimal_places: int | None = None
+            
+            if isinstance(max_decimal_places, dict):
+                # If dict, check if column has specific value; otherwise use default
+                col_max_decimal_places = max_decimal_places.get(col_name, default_max_decimal_places)
+            else:
+                # If int, use it directly
+                col_max_decimal_places = max_decimal_places
+            
+            # Skip if already recommended for int64 conversion or no valid precision specified
+            if col_max_decimal_places is not None and 'int64_conversion' not in col_recommendations:
                 non_null_series = series.dropna()
                 if len(non_null_series) > 0:
-                    # Check if rounding to max_decimal_places would lose significant data
-                    rounded_series = non_null_series.round(max_decimal_places)
-                    
+                    # Check if rounding to col_max_decimal_places would lose significant data
+                    rounded_series = non_null_series.round(col_max_decimal_places)
+
                     # Determine if conversion to int64 is possible (all values are integers after rounding)
                     can_convert_to_int = (
-                        max_decimal_places == 0 and
-                        rounded_series.apply(lambda x: x.is_integer()).sum() == len(rounded_series)
+                        col_max_decimal_places == 0 and
+                        rounded_series.apply(
+                            lambda x: x.is_integer()).sum() == len(rounded_series)
                     )
-                    
+
                     rec = DecimalPrecisionRecommendation(
                         type=RecommendationType.DECIMAL_PRECISION_OPTIMIZATION,
                         column_name=col_name,
-                        description=f"Column '{col_name}' can have decimal precision optimized to {max_decimal_places} places.",
-                        max_decimal_places=max_decimal_places,
+                        description=f"Column '{col_name}' can have decimal precision optimized to {col_max_decimal_places} places.",
+                        max_decimal_places=col_max_decimal_places,
                         min_value=float(non_null_series.min()),
                         max_value=float(non_null_series.max()),
                         convert_to_int=can_convert_to_int
@@ -470,7 +486,8 @@ def analyze_dataset(
     df: pd.DataFrame,
     target_column: str | None = None,
     generate_recs: bool = False,
-    max_decimal_places: int | None = None
+    max_decimal_places: int | dict[str, int] | None = None,
+    default_max_decimal_places: int | None = None
 ) -> tuple[DataframeInfo, dict[str, dict[str, Recommendation]] | None]:
     """Perform comprehensive analysis of all columns in a DataFrame.
 
@@ -483,8 +500,12 @@ def analyze_dataset(
         df (pd.DataFrame): The DataFrame to analyze.
         target_column (str | None): Name of the target column (for recommendation generation).
         generate_recs (bool): Whether to generate recommendations. Default is False.
-        max_decimal_places (int | None): Maximum decimal places for precision optimization.
-            If provided, float columns will be checked for decimal precision optimization.
+        max_decimal_places (int | dict | None): Maximum decimal places for precision optimization.
+            Can be an int (applies to all float columns) or dict mapping column names to their
+            specific max decimal places. If provided, float columns will be checked for
+            decimal precision optimization.
+        default_max_decimal_places (int | None): Default max decimal places to use for columns
+            not in the max_decimal_places dict. Only used if max_decimal_places is a dict.
 
     Returns:
         tuple[DataframeInfo, dict | None]: A tuple containing:
@@ -507,7 +528,8 @@ def analyze_dataset(
 
     recommendations = None
     if generate_recs:
-        recommendations = generate_recommendations(df, target_column, max_decimal_places)
+        recommendations = generate_recommendations(
+            df, target_column, max_decimal_places, default_max_decimal_places)
 
     for c in range(n):
         col = df_info.columns[c]

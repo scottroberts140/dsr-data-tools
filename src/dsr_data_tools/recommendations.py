@@ -455,7 +455,7 @@ class IntegerConversionRecommendation(Recommendation):
 @dataclass
 class DecimalPrecisionRecommendation(Recommendation):
     """Recommendation to optimize decimal precision in float columns.
-    
+
     This recommendation identifies float columns where decimal precision can be
     reduced. The max_decimal_places parameter is editable, allowing the user to
     adjust precision before applying the recommendation. If max_decimal_places is 0
@@ -491,16 +491,20 @@ class DecimalPrecisionRecommendation(Recommendation):
         try:
             if self.max_decimal_places >= 0:
                 # Round to specified decimal places
-                result[self.column_name] = result[self.column_name].round(self.max_decimal_places)
+                result[self.column_name] = result[self.column_name].round(
+                    self.max_decimal_places)
 
                 # If max_decimal_places is 0 and convert_to_int is True, convert to int64
                 if self.max_decimal_places == 0 and self.convert_to_int:
                     if result[self.column_name].isna().any():
-                        result[self.column_name] = result[self.column_name].astype('Int64')
+                        result[self.column_name] = result[self.column_name].astype(
+                            'Int64')
                     else:
-                        result[self.column_name] = result[self.column_name].astype('int64')
+                        result[self.column_name] = result[self.column_name].astype(
+                            'int64')
         except Exception as e:
-            print(f"Warning: Could not optimize decimal precision for column '{self.column_name}': {e}")
+            print(
+                f"Warning: Could not optimize decimal precision for column '{self.column_name}': {e}")
             return result
         return result
 
@@ -512,7 +516,8 @@ class DecimalPrecisionRecommendation(Recommendation):
         print(f"    Max decimal places: {self.max_decimal_places} (EDITABLE)")
         if self.max_decimal_places == 0:
             print(f"    Convert to int64: {self.convert_to_int}")
-        print(f"    Action: Round '{self.column_name}' to {self.max_decimal_places} decimal places")
+        print(
+            f"    Action: Round '{self.column_name}' to {self.max_decimal_places} decimal places")
         if self.max_decimal_places == 0 and self.convert_to_int:
             print(f"           Then convert to int64")
 
