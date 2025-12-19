@@ -14,7 +14,7 @@ from dsr_data_tools.recommendations import (
 )
 import pandas as pd
 from typing import Type
-from dsr_utils import strings
+from dsr_utils.strings import to_snake_case
 from dsr_data_tools.enums import (
     RecommendationType,
     EncodingStrategy,
@@ -24,60 +24,19 @@ from dsr_data_tools.enums import (
 )
 
 
-def _to_snake_case(name: str) -> str:
-    """Convert a string to snake_case format.
-
-    Handles various input formats including PascalCase, camelCase, spaces, 
-    hyphens, and mixed separators.
-
-    Args:
-        name (str): The column name to convert.
-
-    Returns:
-        str: The column name in snake_case format.
-
-    Example:
-        >>> _to_snake_case('FirstName')
-        'first_name'
-        >>> _to_snake_case('first-name')
-        'first_name'
-        >>> _to_snake_case('FIRST_NAME')
-        'first_name'
-    """
-    import re
-
-    # Replace hyphens and spaces with underscores
-    name = name.replace('-', '_').replace(' ', '_')
-
-    # Insert underscore before uppercase letters (for camelCase and PascalCase)
-    # But avoid multiple underscores and handle consecutive capitals
-    name = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
-
-    # Convert to lowercase
-    name = name.lower()
-
-    # Remove any duplicate underscores
-    name = re.sub(r'_+', '_', name)
-
-    # Strip leading/trailing underscores
-    name = name.strip('_')
-
-    return name
-
-
 def _detect_non_numeric_values(series: pd.Series) -> tuple[list[str], int]:
     """Detect non-numeric placeholder values in a series.
-    
+
     Identifies string values that cannot be converted to float in a column
     that should be numeric (has some numeric values).
-    
+
     Args:
         series (pd.Series): The series to check for non-numeric values.
-        
+
     Returns:
         tuple[list[str], int]: A tuple of (list of non-numeric values, count of non-numeric occurrences).
                               Empty list if all values are numeric or null.
-    
+
     Example:
         >>> s = pd.Series([1.0, 2.0, 'tbd', 'N/A', 3.0])
         >>> _detect_non_numeric_values(s)
@@ -85,14 +44,14 @@ def _detect_non_numeric_values(series: pd.Series) -> tuple[list[str], int]:
     """
     non_numeric_values = []
     non_numeric_count = 0
-    
+
     for val in series.dropna().unique():
         try:
             float(val)
         except (ValueError, TypeError):
             non_numeric_values.append(str(val))
             non_numeric_count += (series == val).sum()
-    
+
     return non_numeric_values, non_numeric_count
 
 
@@ -413,8 +372,9 @@ def generate_recommendations(
 
         # 3.7. Check for non-numeric placeholder values (object columns with some numeric values)
         if series.dtype == 'object':
-            non_numeric_vals, non_numeric_cnt = _detect_non_numeric_values(series)
-            
+            non_numeric_vals, non_numeric_cnt = _detect_non_numeric_values(
+                series)
+
             # Only recommend if there are non-numeric values and some numeric values exist
             if non_numeric_vals and len(non_numeric_vals) > 0:
                 numeric_count = 0
@@ -424,7 +384,7 @@ def generate_recommendations(
                         numeric_count += 1
                     except (ValueError, TypeError):
                         pass
-                
+
                 # If there are both numeric and non-numeric values, recommend replacement
                 if numeric_count > 0 and non_numeric_cnt > 0:
                     rec = ValueReplacementRecommendation(
@@ -629,10 +589,10 @@ def analyze_dataset(
     # Normalize column names if requested
     if normalize_column_names:
         df = df.copy()  # Avoid modifying original DataFrame
-        df.columns = [_to_snake_case(col) for col in df.columns]
+        df.columns = [to_snake_case(col) for col in df.columns]
         # Update target_column name if it exists
         if target_column is not None:
-            target_column = _to_snake_case(target_column)
+            target_column = to_snake_case(target_column)
 
     df_info = DataframeInfo(df)
     df_info.info()

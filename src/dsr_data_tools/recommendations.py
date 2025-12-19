@@ -614,7 +614,7 @@ def create_recommendation(
 @dataclass
 class ValueReplacementRecommendation(Recommendation):
     """Recommendation for replacing non-numeric placeholder values with NaN.
-    
+
     Detects columns with non-numeric string placeholders (like 'tbd', 'N/A')
     that should be numeric. The values to replace and replacement value are
     editable before applying.
@@ -644,12 +644,12 @@ class ValueReplacementRecommendation(Recommendation):
             DataFrame with non-numeric values replaced
         """
         result = df.copy()
-        
+
         # Replace each non-numeric value with the replacement value
         for val in self.non_numeric_values:
             result[self.column_name] = result[self.column_name].replace(
                 val, self.replacement_value)
-        
+
         return result
 
     def info(self) -> None:
