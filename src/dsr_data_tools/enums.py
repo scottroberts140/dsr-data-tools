@@ -46,6 +46,7 @@ class EncodingStrategy(Enum):
     CATEGORICAL = "categorical"
     """Convert to pandas categorical dtype (memory optimization, no transformation)"""
 
+
 class MissingValueStrategy(Enum):
     """Strategies for handling missing values."""
 

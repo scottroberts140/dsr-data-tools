@@ -169,7 +169,7 @@ class MissingValuesRecommendation(Recommendation):
 @dataclass
 class EncodingRecommendation(Recommendation):
     """Recommendation for encoding categorical columns with editable strategy.
-    
+
     The encoder_type is editable before applying the recommendation.
     """
 
@@ -197,12 +197,19 @@ class EncodingRecommendation(Recommendation):
 
         if self.encoder_type == EncodingStrategy.CATEGORICAL:
             # Convert to categorical dtype (memory optimization)
-            result[self.column_name] = result[self.column_name].astype('category')
+            result[self.column_name] = result[self.column_name].astype(
+                'category')
 
         elif self.encoder_type == EncodingStrategy.ONEHOT:
             # One-hot encode - creates binary columns for each category
             result = pd.get_dummies(
                 result, columns=[self.column_name], drop_first=False)
+            
+            # Normalize one-hot encoded column names to lowercase snake_case
+            # (e.g., "region_East" -> "region_east")
+            onehot_cols = [col for col in result.columns if col.startswith(self.column_name + '_')]
+            rename_map = {col: col.lower() for col in onehot_cols}
+            result = result.rename(columns=rename_map)
 
         elif self.encoder_type == EncodingStrategy.LABEL:
             # Label encode - assigns integer to each category
