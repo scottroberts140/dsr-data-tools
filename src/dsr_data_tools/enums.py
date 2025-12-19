@@ -34,6 +34,22 @@ class RecommendationType(Enum):
     VALUE_REPLACEMENT = "value_replacement"
     """Column contains non-numeric placeholder values that should be replaced"""
 
+    FEATURE_INTERACTION = "feature_interaction"
+    """Recommended interaction feature combining two columns"""
+
+
+class InteractionType(Enum):
+    """Types of feature interactions."""
+
+    STATUS_IMPACT = "status_impact"
+    """Binary × Continuous: Status column paired with high-variance continuous column"""
+
+    RESOURCE_DENSITY = "resource_density"
+    """Continuous / Continuous: Resource ratio (e.g., Balance / Salary)"""
+
+    PRODUCT_UTILIZATION = "product_utilization"
+    """Discrete / Continuous: Utilization rate (e.g., Products / Tenure)"""
+
 
 class EncodingStrategy(Enum):
     """Strategies for encoding categorical columns."""

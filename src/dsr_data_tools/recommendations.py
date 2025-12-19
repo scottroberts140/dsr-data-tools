@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from collections.abc import Mapping
 
@@ -12,6 +12,7 @@ from dsr_data_tools.enums import (
     MissingValueStrategy,
     OutlierStrategy,
     ImbalanceStrategy,
+    InteractionType,
 )
 
 
@@ -762,3 +763,80 @@ def apply_recommendations(
                 print(f"Warning: Failed to apply {recommendation.type.value} "
                       f"recommendation for '{column_name}': {str(e)}")
     return result_df
+
+@dataclass
+class FeatureInteractionRecommendation(Recommendation):
+    """Recommendation to create a feature interaction between two columns.
+
+    Suggests creating derived features by combining two columns based on
+    statistical patterns (e.g., binary × continuous, continuous / continuous).
+    """
+
+    column_name_2: str
+    """Second column name for the interaction"""
+
+    interaction_type: InteractionType
+    """Type of interaction (STATUS_IMPACT, RESOURCE_DENSITY, PRODUCT_UTILIZATION)"""
+
+    operation: str
+    """Operation to perform: '*' (multiply), '/' (divide)"""
+
+    rationale: str
+    """Explanation for why this interaction is recommended"""
+
+    derived_name: str = ""
+    """Name for the derived feature (EDITABLE)"""
+
+    type: RecommendationType = field(default=RecommendationType.FEATURE_INTERACTION, init=False)
+    """Recommendation type (automatically set to FEATURE_INTERACTION)"""
+
+    def __post_init__(self):
+        """Auto-generate derived_name if not set."""
+        if not self.derived_name:
+            if self.operation == "*":
+                self.derived_name = f"{self.column_name}_{self.column_name_2}"
+            else:
+                self.derived_name = f"{self.column_name}_vs_{self.column_name_2}"
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Create the interaction feature in the dataset.
+
+        Args:
+            df: Input DataFrame
+
+        Returns:
+            DataFrame with new interaction column added
+        """
+        if self.column_name not in df.columns or self.column_name_2 not in df.columns:
+            raise ValueError(
+                f"Column '{self.column_name}' or '{self.column_name_2}' not found in DataFrame"
+            )
+
+        df = df.copy()
+        if self.operation == "*":
+            df[self.derived_name] = df[self.column_name] * df[self.column_name_2]
+        elif self.operation == "/":
+            # Avoid division by zero
+            df[self.derived_name] = df[self.column_name] / df[self.column_name_2].replace(
+                0, np.nan
+            )
+        else:
+            raise ValueError(f"Unknown operation: {self.operation}")
+
+        return df
+
+    def info(self) -> None:
+        """Display recommendation information."""
+        operation_name = (
+            "multiply"
+            if self.operation == "*"
+            else "divide"
+            if self.operation == "/"
+            else self.operation
+        )
+        print(f"  Recommendation: FEATURE_INTERACTION")
+        print(f"    Type: {self.interaction_type.value}")
+        print(f"    Operation: {operation_name} ('{self.column_name}' {self.operation} '{self.column_name_2}')")
+        print(f"    New Feature: '{self.derived_name}' (EDITABLE)")
+        print(f"    Rationale: {self.rationale}")

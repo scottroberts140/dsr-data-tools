@@ -11,6 +11,7 @@ from dsr_data_tools.recommendations import (
     IntegerConversionRecommendation,
     DecimalPrecisionRecommendation,
     ValueReplacementRecommendation,
+    FeatureInteractionRecommendation,
 )
 import pandas as pd
 from typing import Type
@@ -21,6 +22,7 @@ from dsr_data_tools.enums import (
     MissingValueStrategy,
     OutlierStrategy,
     ImbalanceStrategy,
+    InteractionType,
 )
 
 
@@ -617,4 +619,142 @@ def analyze_dataset(
                     recommendation.info()
                 print()
 
+    return df_info, recommendations
+
+
+def generate_interaction_recommendations(
+    df: pd.DataFrame, exclude_columns: list[str] | None = None
+) -> list[FeatureInteractionRecommendation]:
+    """Generate recommended feature interactions based on statistical patterns.
+
+    Analyzes numeric and categorical columns to suggest meaningful interactions
+    based on three rules:
+    1. Status-Impact: Binary × High-variance continuous
+    2. Resource Density: Continuous / Continuous (financial ratios)
+    3. Product Utilization: Count × Duration (frequency/rate metrics)
+
+    Args:
+        df (pd.DataFrame): DataFrame to analyze for interaction opportunities.
+        exclude_columns (list[str] | None): Columns to exclude from interactions
+            (e.g., target column, ID columns). Default is None.
+
+    Returns:
+        list[FeatureInteractionRecommendation]: List of recommended interactions
+            (may be empty if no suitable candidates found).
+
+    Example:
+        >>> df = pd.DataFrame({
+        ...     'Balance': [1000, 5000, 10000],
+        ...     'IsActiveMember': [0, 1, 1],
+        ...     'EstimatedSalary': [50000, 75000, 100000],
+        ...     'Target': [0, 1, 0]
+        ... })
+        >>> interactions = generate_interaction_recommendations(df, exclude_columns=['Target'])
+        >>> for rec in interactions:
+        ...     rec.info()
+    """
+    import numpy as np
+
+    interactions: list[FeatureInteractionRecommendation] = []
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
+    if len(numeric_cols) < 2:
+        return interactions
+
+    # Initialize exclude list
+    if exclude_columns is None:
+        exclude_columns = []
+
+    # Exclude ID-like columns and specified columns
+    id_keywords = ["id", "row", "index", "number", "code"]
+    exclude_cols = set(exclude_columns)
+    exclude_cols.update(col for col in numeric_cols if any(kw in col.lower() for kw in id_keywords))
+    
+    usable_cols = [col for col in numeric_cols if col not in exclude_cols]
+
+    if len(usable_cols) < 2:
+        return interactions
+
+    # Rule 1: Status-Impact (Binary × High-variance continuous)
+    binary_cols = [col for col in usable_cols if df[col].nunique() == 2]
+    
+    # Filter high-variance continuous columns (must have reasonable cardinality and variance)
+    high_variance_cols = [
+        col for col in usable_cols
+        if df[col].nunique() > 10 and col not in binary_cols
+        and df[col].var() > df[usable_cols].var().quantile(0.6)
+    ]
+
+    for binary_col in binary_cols:
+        for cont_col in high_variance_cols:
+            if binary_col != cont_col:
+                interactions.append(
+                    FeatureInteractionRecommendation(
+                        column_name=cont_col,
+                        column_name_2=binary_col,
+                        interaction_type=InteractionType.STATUS_IMPACT,
+                        operation="*",
+                        description=f"Status-Impact interaction: {cont_col} × {binary_col}",
+                        rationale=f"Multiply high-variance '{cont_col}' by binary status '{binary_col}' "
+                                 f"to distinguish behavior based on membership status",
+                    )
+                )
+
+    # Rule 2: Resource Density (Continuous / Continuous)
+    # Look for financial or resource-like columns
+    financial_keywords = ["balance", "salary", "income", "revenue", "credit"]
+    financial_cols = [
+        col for col in usable_cols
+        if any(kw in col.lower() for kw in financial_keywords)
+    ]
+
+    # Create ratios between financial columns
+    for i, col1 in enumerate(financial_cols):
+        for col2 in financial_cols[i + 1 :]:
+            # Avoid division by columns with zeros or very small values
+            if (df[col2] != 0).sum() / len(df) > 0.9:  # At least 90% non-zero
+                interactions.append(
+                    FeatureInteractionRecommendation(
+                        column_name=col1,
+                        column_name_2=col2,
+                        interaction_type=InteractionType.RESOURCE_DENSITY,
+                        operation="/",
+                        description=f"Resource Density ratio: {col1} / {col2}",
+                        rationale=f"Create a ratio of '{col1}' to '{col2}' to normalize and capture "
+                                 f"relative financial metrics",
+                    )
+                )
+
+    # Rule 3: Product Utilization (Discrete / Continuous)
+    # Look for count and duration columns
+    count_keywords = ["num", "count", "product"]
+    duration_keywords = ["tenure", "age", "year", "month", "day"]
+
+    count_cols = [
+        col for col in usable_cols
+        if any(kw in col.lower() for kw in count_keywords) and df[col].nunique() <= 20
+    ]
+
+    duration_cols = [
+        col for col in usable_cols
+        if any(kw in col.lower() for kw in duration_keywords)
+    ]
+
+    for count_col in count_cols:
+        for dur_col in duration_cols:
+            # Avoid division by zero
+            if (df[dur_col] != 0).sum() / len(df) > 0.9:
+                interactions.append(
+                    FeatureInteractionRecommendation(
+                        column_name=count_col,
+                        column_name_2=dur_col,
+                        interaction_type=InteractionType.PRODUCT_UTILIZATION,
+                        operation="/",
+                        description=f"Product Utilization rate: {count_col} / {dur_col}",
+                        rationale=f"Create a rate metric '{count_col}' per '{dur_col}' to measure "
+                                 f"adoption velocity and utilization intensity",
+                    )
+                )
+
+    return interactions
     return df_info, recommendations
