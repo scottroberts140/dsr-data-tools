@@ -7,6 +7,7 @@ from dsr_data_tools.analysis import (
     DataframeInfo,
     analyze_column_data,
     analyze_dataset,
+    generate_interaction_recommendations,
 )
 from dsr_data_tools.recommendations import apply_recommendations
 from dsr_data_tools.enums import (
@@ -15,6 +16,7 @@ from dsr_data_tools.enums import (
     MissingValueStrategy,
     OutlierStrategy,
     ImbalanceStrategy,
+    InteractionType,
 )
 
 __all__ = [
@@ -22,12 +24,11 @@ __all__ = [
     "DataframeInfo",
     "analyze_column_data",
     "analyze_dataset",
+    "generate_interaction_recommendations",
     "apply_recommendations",
     "RecommendationType",
     "EncodingStrategy",
     "MissingValueStrategy",
     "OutlierStrategy",
     "ImbalanceStrategy",
-]
-
-__version__ = "0.0.1"
+    "InteractionType",
