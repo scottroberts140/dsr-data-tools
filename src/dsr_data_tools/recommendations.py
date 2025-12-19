@@ -79,7 +79,7 @@ class NonInformativeRecommendation(Recommendation):
 @dataclass
 class MissingValuesRecommendation(Recommendation):
     """Recommendation for handling missing values with editable strategy.
-    
+
     The strategy and fill_value are editable before applying the recommendation.
     """
 
@@ -138,13 +138,14 @@ class MissingValuesRecommendation(Recommendation):
                     self.fill_value)
 
         # MissingValueStrategy.LEAVE_AS_NA: Do nothing
-        
+
         return result
 
     def info(self) -> None:
         """Display recommendation information including editable parameters."""
         print(f"  Recommendation: {self.type.name}")
-        print(f"    Missing count: {self.missing_count} ({self.missing_percentage:.1f}%)")
+        print(
+            f"    Missing count: {self.missing_count} ({self.missing_percentage:.1f}%)")
         print(f"    Strategy: {self.strategy.value} (EDITABLE)")
         if self.strategy == MissingValueStrategy.FILL_VALUE:
             print(f"    Fill value: {self.fill_value} (EDITABLE)")
@@ -167,10 +168,13 @@ class MissingValuesRecommendation(Recommendation):
 
 @dataclass
 class EncodingRecommendation(Recommendation):
-    """Recommendation for encoding categorical columns."""
+    """Recommendation for encoding categorical columns with editable strategy.
+    
+    The encoder_type is editable before applying the recommendation.
+    """
 
     encoder_type: EncodingStrategy
-    """Recommended encoding strategy"""
+    """Encoding strategy (EDITABLE before apply)"""
 
     unique_values: int
     """Number of unique values in the column"""
@@ -187,11 +191,15 @@ class EncodingRecommendation(Recommendation):
             df: Input DataFrame
 
         Returns:
-            DataFrame with column encoded
+            DataFrame with column encoded or converted to categorical
         """
         result = df.copy()
 
-        if self.encoder_type == EncodingStrategy.ONEHOT:
+        if self.encoder_type == EncodingStrategy.CATEGORICAL:
+            # Convert to categorical dtype (memory optimization)
+            result[self.column_name] = result[self.column_name].astype('category')
+
+        elif self.encoder_type == EncodingStrategy.ONEHOT:
             # One-hot encode - creates binary columns for each category
             result = pd.get_dummies(
                 result, columns=[self.column_name], drop_first=False)
@@ -221,12 +229,23 @@ class EncodingRecommendation(Recommendation):
         return result
 
     def info(self) -> None:
-        """Display recommendation information."""
-        print(f"  Recommendation: ENCODING")
+        """Display recommendation information including editable parameters."""
+        print(f"  Recommendation: {self.type.name}")
         print(f"    Unique values: {self.unique_values}")
-        print(f"    Encoder type: {self.encoder_type.value}")
-        print(
-            f"    Action: Apply {self.encoder_type.value} encoding to '{self.column_name}'")
+        print(f"    Encoder type: {self.encoder_type.value} (EDITABLE)")
+        print(f"    Action: {self._get_action_description()}")
+
+    def _get_action_description(self) -> str:
+        """Get a human-readable description of the encoding action."""
+        if self.encoder_type == EncodingStrategy.CATEGORICAL:
+            return f"Convert '{self.column_name}' to categorical dtype (memory optimization)"
+        elif self.encoder_type == EncodingStrategy.ONEHOT:
+            return f"Apply one-hot encoding to '{self.column_name}' ({self.unique_values} categories)"
+        elif self.encoder_type == EncodingStrategy.LABEL:
+            return f"Apply label encoding to '{self.column_name}'"
+        elif self.encoder_type == EncodingStrategy.ORDINAL:
+            return f"Apply ordinal encoding to '{self.column_name}'"
+        return ""
 
 
 @dataclass
