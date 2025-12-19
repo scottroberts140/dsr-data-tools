@@ -31,6 +31,9 @@ class RecommendationType(Enum):
     DECIMAL_PRECISION_OPTIMIZATION = "decimal_precision_optimization"
     """Float column can have decimal precision reduced or be converted to int64"""
 
+    VALUE_REPLACEMENT = "value_replacement"
+    """Column contains non-numeric placeholder values that should be replaced"""
+
 
 class EncodingStrategy(Enum):
     """Strategies for encoding categorical columns."""

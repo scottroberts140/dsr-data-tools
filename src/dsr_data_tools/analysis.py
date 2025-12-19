@@ -10,6 +10,7 @@ from dsr_data_tools.recommendations import (
     BinningRecommendation,
     IntegerConversionRecommendation,
     DecimalPrecisionRecommendation,
+    ValueReplacementRecommendation,
 )
 import pandas as pd
 from typing import Type
@@ -62,6 +63,37 @@ def _to_snake_case(name: str) -> str:
     name = name.strip('_')
 
     return name
+
+
+def _detect_non_numeric_values(series: pd.Series) -> tuple[list[str], int]:
+    """Detect non-numeric placeholder values in a series.
+    
+    Identifies string values that cannot be converted to float in a column
+    that should be numeric (has some numeric values).
+    
+    Args:
+        series (pd.Series): The series to check for non-numeric values.
+        
+    Returns:
+        tuple[list[str], int]: A tuple of (list of non-numeric values, count of non-numeric occurrences).
+                              Empty list if all values are numeric or null.
+    
+    Example:
+        >>> s = pd.Series([1.0, 2.0, 'tbd', 'N/A', 3.0])
+        >>> _detect_non_numeric_values(s)
+        (['tbd', 'N/A'], 2)
+    """
+    non_numeric_values = []
+    non_numeric_count = 0
+    
+    for val in series.dropna().unique():
+        try:
+            float(val)
+        except (ValueError, TypeError):
+            non_numeric_values.append(str(val))
+            non_numeric_count += (series == val).sum()
+    
+    return non_numeric_values, non_numeric_count
 
 
 class DataframeColumn:
@@ -379,7 +411,33 @@ def generate_recommendations(
                     )
                     col_recommendations['decimal_precision_optimization'] = rec
 
+        # 3.7. Check for non-numeric placeholder values (object columns with some numeric values)
+        if series.dtype == 'object':
+            non_numeric_vals, non_numeric_cnt = _detect_non_numeric_values(series)
+            
+            # Only recommend if there are non-numeric values and some numeric values exist
+            if non_numeric_vals and len(non_numeric_vals) > 0:
+                numeric_count = 0
+                for val in series.dropna().unique():
+                    try:
+                        float(val)
+                        numeric_count += 1
+                    except (ValueError, TypeError):
+                        pass
+                
+                # If there are both numeric and non-numeric values, recommend replacement
+                if numeric_count > 0 and non_numeric_cnt > 0:
+                    rec = ValueReplacementRecommendation(
+                        type=RecommendationType.VALUE_REPLACEMENT,
+                        column_name=col_name,
+                        description=f"Column '{col_name}' has non-numeric placeholder values that should be replaced.",
+                        non_numeric_values=non_numeric_vals,
+                        non_numeric_count=non_numeric_cnt
+                    )
+                    col_recommendations['value_replacement'] = rec
+
         # 4. Check for encoding recommendations (categorical columns)
+
         if not is_numeric and col_name != target_column:
             # Binary categorical: 2 unique values
             if unique_count == 2:

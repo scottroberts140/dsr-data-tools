@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 from collections.abc import Mapping
 
+import numpy as np
 import pandas as pd
 
 from dsr_data_tools.enums import (
@@ -204,10 +205,11 @@ class EncodingRecommendation(Recommendation):
             # One-hot encode - creates binary columns for each category
             result = pd.get_dummies(
                 result, columns=[self.column_name], drop_first=False)
-            
+
             # Normalize one-hot encoded column names to lowercase snake_case
             # (e.g., "region_East" -> "region_east")
-            onehot_cols = [col for col in result.columns if col.startswith(self.column_name + '_')]
+            onehot_cols = [col for col in result.columns if col.startswith(
+                self.column_name + '_')]
             rename_map = {col: col.lower() for col in onehot_cols}
             result = result.rename(columns=rename_map)
 
@@ -607,6 +609,64 @@ def create_recommendation(
         description=description,
         **kwargs
     )
+
+
+@dataclass
+class ValueReplacementRecommendation(Recommendation):
+    """Recommendation for replacing non-numeric placeholder values with NaN.
+    
+    Detects columns with non-numeric string placeholders (like 'tbd', 'N/A')
+    that should be numeric. The values to replace and replacement value are
+    editable before applying.
+    """
+
+    non_numeric_values: list[str]
+    """List of non-numeric placeholder values found in column (e.g., ['tbd'])"""
+
+    non_numeric_count: int
+    """Total count of non-numeric values"""
+
+    replacement_value: float | str = np.nan
+    """Value to replace non-numeric placeholders with (EDITABLE, default: np.nan)"""
+
+    def __post_init__(self):
+        """Set type to VALUE_REPLACEMENT."""
+        self.type = RecommendationType.VALUE_REPLACEMENT
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Replace non-numeric placeholder values with specified replacement value.
+
+        Args:
+            df: Input DataFrame
+
+        Returns:
+            DataFrame with non-numeric values replaced
+        """
+        result = df.copy()
+        
+        # Replace each non-numeric value with the replacement value
+        for val in self.non_numeric_values:
+            result[self.column_name] = result[self.column_name].replace(
+                val, self.replacement_value)
+        
+        return result
+
+    def info(self) -> None:
+        """Display recommendation information including editable parameters."""
+        print(f"  Recommendation: {self.type.name}")
+        print(f"    Non-numeric values: {self.non_numeric_values}")
+        print(f"    Count: {self.non_numeric_count}")
+        print(f"    Replacement value: {self.replacement_value} (EDITABLE)")
+        print(f"    Action: {self._get_action_description()}")
+
+    def _get_action_description(self) -> str:
+        """Get a human-readable description of the replacement action."""
+        values_str = "', '".join(self.non_numeric_values)
+        if pd.isna(self.replacement_value):
+            return f"Replace '{values_str}' with NaN in '{self.column_name}'"
+        else:
+            return f"Replace '{values_str}' with '{self.replacement_value}' in '{self.column_name}'"
 
 
 def apply_recommendations(
