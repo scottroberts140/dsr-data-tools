@@ -32,3 +32,6 @@ __all__ = [
     "OutlierStrategy",
     "ImbalanceStrategy",
     "InteractionType",
+]
+
+__version__ = "0.0.1"

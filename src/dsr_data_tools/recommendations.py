@@ -764,6 +764,7 @@ def apply_recommendations(
                       f"recommendation for '{column_name}': {str(e)}")
     return result_df
 
+
 @dataclass
 class FeatureInteractionRecommendation(Recommendation):
     """Recommendation to create a feature interaction between two columns.
@@ -787,7 +788,8 @@ class FeatureInteractionRecommendation(Recommendation):
     derived_name: str = ""
     """Name for the derived feature (EDITABLE)"""
 
-    type: RecommendationType = field(default=RecommendationType.FEATURE_INTERACTION, init=False)
+    type: RecommendationType = field(
+        default=RecommendationType.FEATURE_INTERACTION, init=False)
     """Recommendation type (automatically set to FEATURE_INTERACTION)"""
 
     def __post_init__(self):
@@ -837,6 +839,7 @@ class FeatureInteractionRecommendation(Recommendation):
         )
         print(f"  Recommendation: FEATURE_INTERACTION")
         print(f"    Type: {self.interaction_type.value}")
-        print(f"    Operation: {operation_name} ('{self.column_name}' {self.operation} '{self.column_name_2}')")
+        print(
+            f"    Operation: {operation_name} ('{self.column_name}' {self.operation} '{self.column_name_2}')")
         print(f"    New Feature: '{self.derived_name}' (EDITABLE)")
         print(f"    Rationale: {self.rationale}")

@@ -15,6 +15,7 @@ from dsr_data_tools.recommendations import (
 )
 import pandas as pd
 from typing import Type
+from dsr_utils import strings
 from dsr_utils.strings import to_snake_case
 from dsr_data_tools.enums import (
     RecommendationType,
@@ -668,8 +669,9 @@ def generate_interaction_recommendations(
     # Exclude ID-like columns and specified columns
     id_keywords = ["id", "row", "index", "number", "code"]
     exclude_cols = set(exclude_columns)
-    exclude_cols.update(col for col in numeric_cols if any(kw in col.lower() for kw in id_keywords))
-    
+    exclude_cols.update(col for col in numeric_cols if any(
+        kw in col.lower() for kw in id_keywords))
+
     usable_cols = [col for col in numeric_cols if col not in exclude_cols]
 
     if len(usable_cols) < 2:
@@ -677,7 +679,7 @@ def generate_interaction_recommendations(
 
     # Rule 1: Status-Impact (Binary × High-variance continuous)
     binary_cols = [col for col in usable_cols if df[col].nunique() == 2]
-    
+
     # Filter high-variance continuous columns (must have reasonable cardinality and variance)
     high_variance_cols = [
         col for col in usable_cols
@@ -696,7 +698,7 @@ def generate_interaction_recommendations(
                         operation="*",
                         description=f"Status-Impact interaction: {cont_col} × {binary_col}",
                         rationale=f"Multiply high-variance '{cont_col}' by binary status '{binary_col}' "
-                                 f"to distinguish behavior based on membership status",
+                        f"to distinguish behavior based on membership status",
                     )
                 )
 
@@ -710,7 +712,7 @@ def generate_interaction_recommendations(
 
     # Create ratios between financial columns
     for i, col1 in enumerate(financial_cols):
-        for col2 in financial_cols[i + 1 :]:
+        for col2 in financial_cols[i + 1:]:
             # Avoid division by columns with zeros or very small values
             if (df[col2] != 0).sum() / len(df) > 0.9:  # At least 90% non-zero
                 interactions.append(
@@ -721,7 +723,7 @@ def generate_interaction_recommendations(
                         operation="/",
                         description=f"Resource Density ratio: {col1} / {col2}",
                         rationale=f"Create a ratio of '{col1}' to '{col2}' to normalize and capture "
-                                 f"relative financial metrics",
+                        f"relative financial metrics",
                     )
                 )
 
@@ -752,7 +754,7 @@ def generate_interaction_recommendations(
                         operation="/",
                         description=f"Product Utilization rate: {count_col} / {dur_col}",
                         rationale=f"Create a rate metric '{count_col}' per '{dur_col}' to measure "
-                                 f"adoption velocity and utilization intensity",
+                        f"adoption velocity and utilization intensity",
                     )
                 )
 
