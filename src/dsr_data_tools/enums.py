@@ -28,6 +28,9 @@ class RecommendationType(Enum):
     INT64_CONVERSION = "int64_conversion"
     """Float column with only integer values should be converted to int64"""
 
+    DECIMAL_PRECISION_OPTIMIZATION = "decimal_precision_optimization"
+    """Float column can have decimal precision reduced or be converted to int64"""
+
 
 class EncodingStrategy(Enum):
     """Strategies for encoding categorical columns."""

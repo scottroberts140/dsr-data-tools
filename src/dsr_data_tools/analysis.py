@@ -19,6 +19,7 @@ from dsr_data_tools.recommendations import (
     BooleanClassificationRecommendation,
     BinningRecommendation,
     IntegerConversionRecommendation,
+    DecimalPrecisionRecommendation,
 )
 
 
@@ -175,7 +176,8 @@ class DataframeInfo:
 
 def generate_recommendations(
     df: pd.DataFrame,
-    target_column: str | None = None
+    target_column: str | None = None,
+    max_decimal_places: int | None = None
 ) -> dict[str, dict[str, Recommendation]]:
     """Generate data preparation recommendations for each column in a DataFrame.
 
@@ -186,6 +188,8 @@ def generate_recommendations(
         df (pd.DataFrame): The DataFrame to analyze.
         target_column (str | None): Name of the target column (for imbalance detection).
             If provided, class imbalance will be analyzed for this column.
+        max_decimal_places (int | None): Maximum decimal places for precision optimization.
+            If provided, float columns will be checked for decimal precision optimization.
 
     Returns:
         dict[str, dict[str, Recommendation]]: Nested dictionary mapping column names
@@ -278,7 +282,8 @@ def generate_recommendations(
         if series.dtype == 'float64':
             non_null_series = series.dropna()
             if len(non_null_series) > 0:
-                integer_count = non_null_series.apply(lambda x: x.is_integer()).sum()
+                integer_count = non_null_series.apply(
+                    lambda x: x.is_integer()).sum()
                 if integer_count == len(non_null_series):
                     rec = IntegerConversionRecommendation(
                         type=RecommendationType.INT64_CONVERSION,
@@ -287,6 +292,33 @@ def generate_recommendations(
                         integer_count=integer_count
                     )
                     col_recommendations['int64_conversion'] = rec
+
+        # 3.6. Check for decimal precision optimization (float columns with user-specified max precision)
+        # Only if max_decimal_places is provided and column is numeric float type
+        if max_decimal_places is not None and series.dtype == 'float64':
+            # Skip if already recommended for int64 conversion
+            if 'int64_conversion' not in col_recommendations:
+                non_null_series = series.dropna()
+                if len(non_null_series) > 0:
+                    # Check if rounding to max_decimal_places would lose significant data
+                    rounded_series = non_null_series.round(max_decimal_places)
+                    
+                    # Determine if conversion to int64 is possible (all values are integers after rounding)
+                    can_convert_to_int = (
+                        max_decimal_places == 0 and
+                        rounded_series.apply(lambda x: x.is_integer()).sum() == len(rounded_series)
+                    )
+                    
+                    rec = DecimalPrecisionRecommendation(
+                        type=RecommendationType.DECIMAL_PRECISION_OPTIMIZATION,
+                        column_name=col_name,
+                        description=f"Column '{col_name}' can have decimal precision optimized to {max_decimal_places} places.",
+                        max_decimal_places=max_decimal_places,
+                        min_value=float(non_null_series.min()),
+                        max_value=float(non_null_series.max()),
+                        convert_to_int=can_convert_to_int
+                    )
+                    col_recommendations['decimal_precision_optimization'] = rec
 
         # 4. Check for encoding recommendations (categorical columns)
         if not is_numeric and col_name != target_column:

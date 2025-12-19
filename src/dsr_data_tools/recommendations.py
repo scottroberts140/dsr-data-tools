@@ -433,11 +433,14 @@ class IntegerConversionRecommendation(Recommendation):
         try:
             # Handle NaN values by converting to Int64 (nullable integer type)
             if result[self.column_name].isna().any():
-                result[self.column_name] = result[self.column_name].astype('Int64')
+                result[self.column_name] = result[self.column_name].astype(
+                    'Int64')
             else:
-                result[self.column_name] = result[self.column_name].astype('int64')
+                result[self.column_name] = result[self.column_name].astype(
+                    'int64')
         except Exception as e:
-            print(f"Warning: Could not convert column '{self.column_name}' to int64: {e}")
+            print(
+                f"Warning: Could not convert column '{self.column_name}' to int64: {e}")
             return result
         return result
 
@@ -445,7 +448,73 @@ class IntegerConversionRecommendation(Recommendation):
         """Display recommendation information."""
         print(f"  Recommendation: INT64_CONVERSION")
         print(f"    Integer values: {self.integer_count}")
-        print(f"    Action: Convert '{self.column_name}' from float64 to int64")
+        print(
+            f"    Action: Convert '{self.column_name}' from float64 to int64")
+
+
+@dataclass
+class DecimalPrecisionRecommendation(Recommendation):
+    """Recommendation to optimize decimal precision in float columns.
+    
+    This recommendation identifies float columns where decimal precision can be
+    reduced. The max_decimal_places parameter is editable, allowing the user to
+    adjust precision before applying the recommendation. If max_decimal_places is 0
+    and all values are integers after rounding, the column can be converted to int64.
+    """
+
+    max_decimal_places: int
+    """Maximum number of decimal places to retain (user-editable)"""
+
+    min_value: float
+    """Minimum value in the column (for reference)"""
+
+    max_value: float
+    """Maximum value in the column (for reference)"""
+
+    convert_to_int: bool = False
+    """Whether to convert to int64 if max_decimal_places is 0 and all values are integers"""
+
+    def __post_init__(self):
+        """Set type to DECIMAL_PRECISION_OPTIMIZATION."""
+        self.type = RecommendationType.DECIMAL_PRECISION_OPTIMIZATION
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply decimal precision optimization to the column.
+
+        Args:
+            df: Input DataFrame
+
+        Returns:
+            DataFrame with column rounded to specified precision, optionally converted to int64
+        """
+        result = df.copy()
+        try:
+            if self.max_decimal_places >= 0:
+                # Round to specified decimal places
+                result[self.column_name] = result[self.column_name].round(self.max_decimal_places)
+
+                # If max_decimal_places is 0 and convert_to_int is True, convert to int64
+                if self.max_decimal_places == 0 and self.convert_to_int:
+                    if result[self.column_name].isna().any():
+                        result[self.column_name] = result[self.column_name].astype('Int64')
+                    else:
+                        result[self.column_name] = result[self.column_name].astype('int64')
+        except Exception as e:
+            print(f"Warning: Could not optimize decimal precision for column '{self.column_name}': {e}")
+            return result
+        return result
+
+    def info(self) -> None:
+        """Display recommendation information."""
+        print(f"  Recommendation: DECIMAL_PRECISION_OPTIMIZATION")
+        print(f"    Column: '{self.column_name}'")
+        print(f"    Range: {self.min_value} to {self.max_value}")
+        print(f"    Max decimal places: {self.max_decimal_places} (EDITABLE)")
+        if self.max_decimal_places == 0:
+            print(f"    Convert to int64: {self.convert_to_int}")
+        print(f"    Action: Round '{self.column_name}' to {self.max_decimal_places} decimal places")
+        if self.max_decimal_places == 0 and self.convert_to_int:
+            print(f"           Then convert to int64")
 
 
 def create_recommendation(
