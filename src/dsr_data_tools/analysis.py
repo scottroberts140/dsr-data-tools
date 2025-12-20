@@ -858,7 +858,7 @@ def generate_interaction_recommendations(
                         description=f"Status-Impact interaction: {cont_col} × {binary_col}",
                         rationale=f"Multiply high-variance '{cont_col}' by binary status '{binary_col}' "
                         f"to distinguish behavior based on membership status",
-                        priority_score=mi_series[binary_col]
+                        priority_score=priority_score
                     )
                 )
 
