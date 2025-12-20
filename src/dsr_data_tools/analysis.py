@@ -27,14 +27,15 @@ from dsr_data_tools.enums import (
 )
 
 
-def _detect_non_numeric_values(series: pd.Series) -> tuple[list[str], int]:
+def _detect_non_numeric_values(non_null_unique, value_counts) -> tuple[list[str], int]:
     """Detect non-numeric placeholder values in a series.
 
     Identifies string values that cannot be converted to float in a column
     that should be numeric (has some numeric values).
 
     Args:
-        series (pd.Series): The series to check for non-numeric values.
+        non_null_unique: Array of unique non-null values from the series.
+        value_counts: Pre-computed value counts for the series.
 
     Returns:
         tuple[list[str], int]: A tuple of (list of non-numeric values, count of non-numeric occurrences).
@@ -42,18 +43,20 @@ def _detect_non_numeric_values(series: pd.Series) -> tuple[list[str], int]:
 
     Example:
         >>> s = pd.Series([1.0, 2.0, 'tbd', 'N/A', 3.0])
-        >>> _detect_non_numeric_values(s)
+        >>> unique_vals = s.dropna().unique()
+        >>> val_counts = s.value_counts()
+        >>> _detect_non_numeric_values(unique_vals, val_counts)
         (['tbd', 'N/A'], 2)
     """
     non_numeric_values = []
     non_numeric_count = 0
 
-    for val in series.dropna().unique():
+    for val in non_null_unique:
         try:
             float(val)
         except (ValueError, TypeError):
             non_numeric_values.append(str(val))
-            non_numeric_count += (series == val).sum()
+            non_numeric_count += value_counts.get(val, 0)  # O(1) lookup
 
     return non_numeric_values, non_numeric_count
 
@@ -269,6 +272,17 @@ def generate_recommendations(
         col_recommendations: dict[str, Recommendation] = {}
         series = df[col_name]
 
+        # Cache commonly used series transformations for performance
+        non_null_series = series.dropna()
+        non_null_unique = non_null_series.unique()
+
+        # Cache min/max for numeric columns (computed lazily when needed)
+        non_null_min = None
+        non_null_max = None
+
+        # Cache value_counts (computed lazily when needed)
+        value_counts_cache = None
+
         # 1. Check for non-informative columns
         unique_count = series.nunique()
         total_rows = len(df)
@@ -324,7 +338,7 @@ def generate_recommendations(
         # 3. Check for boolean classification (exactly 2 unique numeric values)
         # Skip target column as it should remain numeric for classifiers
         if is_numeric and unique_count == 2 and col_name != target_column:
-            values = sorted(series.dropna().unique().tolist())
+            values = sorted(non_null_unique.tolist())
             if values == [0.0, 1.0] or values == [0, 1]:
                 rec = BooleanClassificationRecommendation(
                     type=RecommendationType.BOOLEAN_CLASSIFICATION,
@@ -337,11 +351,11 @@ def generate_recommendations(
         # 3.5. Check for int64 conversion (float64 with all integer values)
         # Only check if column is float64 and has no non-integer values
         if series.dtype == 'float64':
-            non_null_series = series.dropna()
             if len(non_null_series) > 0:
-                integer_count = non_null_series.apply(
-                    lambda x: x.is_integer()).sum()
-                if integer_count == len(non_null_series):
+                # Vectorized check: all values have zero fractional part
+                integer_mask = (non_null_series % 1 == 0)
+                integer_count = int(integer_mask.sum())
+                if integer_mask.all():
                     rec = IntegerConversionRecommendation(
                         type=RecommendationType.INT64_CONVERSION,
                         column_name=col_name,
@@ -366,39 +380,49 @@ def generate_recommendations(
 
             # Skip if already recommended for int64 conversion or no valid precision specified
             if col_max_decimal_places is not None and 'int64_conversion' not in col_recommendations:
-                non_null_series = series.dropna()
                 if len(non_null_series) > 0:
+                    # Compute min/max if not already cached
+                    if non_null_min is None:
+                        non_null_min = non_null_series.min()
+                        non_null_max = non_null_series.max()
+
                     # Check if rounding to col_max_decimal_places would lose significant data
                     rounded_series = non_null_series.round(
                         col_max_decimal_places)
 
                     # Determine if conversion to int64 is possible (all values are integers after rounding)
                     can_convert_to_int = (
-                        col_max_decimal_places == 0 and
-                        rounded_series.apply(
-                            lambda x: x.is_integer()).sum() == len(rounded_series)
+                        col_max_decimal_places == 0 and (rounded_series % 1 == 0).all()
                     )
+
+                    # Ensure typed float values for min/max to satisfy type checkers
+                    min_val = float(non_null_min) if non_null_min is not None else float('nan')
+                    max_val = float(non_null_max) if non_null_max is not None else float('nan')
 
                     rec = DecimalPrecisionRecommendation(
                         type=RecommendationType.DECIMAL_PRECISION_OPTIMIZATION,
                         column_name=col_name,
                         description=f"Column '{col_name}' can have decimal precision optimized to {col_max_decimal_places} places.",
                         max_decimal_places=col_max_decimal_places,
-                        min_value=float(non_null_series.min()),
-                        max_value=float(non_null_series.max()),
-                        convert_to_int=can_convert_to_int
+                        min_value=min_val,
+                        max_value=max_val,
+                        convert_to_int=bool(can_convert_to_int)
                     )
                     col_recommendations['decimal_precision_optimization'] = rec
 
         # 3.7. Check for non-numeric placeholder values (object columns with some numeric values)
         if series.dtype == 'object':
+            # Compute value_counts if not already cached
+            if value_counts_cache is None:
+                value_counts_cache = series.value_counts()
+
             non_numeric_vals, non_numeric_cnt = _detect_non_numeric_values(
-                series)
+                non_null_unique, value_counts_cache)
 
             # Only recommend if there are non-numeric values and some numeric values exist
             if non_numeric_vals and len(non_numeric_vals) > 0:
                 numeric_count = 0
-                for val in series.dropna().unique():
+                for val in non_null_unique:
                     try:
                         float(val)
                         numeric_count += 1
@@ -445,7 +469,6 @@ def generate_recommendations(
         if is_numeric:
             mean_value = series.mean()
             max_value = series.max()
-            min_value = series.min()
 
             # Check if max value significantly exceeds mean (potential outliers)
             if max_value > mean_value * 2:  # Max is more than 2x the mean
@@ -461,8 +484,12 @@ def generate_recommendations(
 
         # 6. Check for class imbalance (target column)
         if col_name == target_column and unique_count <= 2:
-            class_counts = series.value_counts()
-            max_class_percentage = (class_counts.max() / total_rows) * 100
+            # Compute value_counts if not already cached
+            if value_counts_cache is None:
+                value_counts_cache = series.value_counts()
+
+            max_class_percentage = (
+                value_counts_cache.max() / total_rows) * 100
 
             if max_class_percentage > 70:
                 rec = ClassImbalanceRecommendation(
@@ -503,9 +530,14 @@ def generate_recommendations(
 
             # Check if column has reasonable variance and distribution for binning
             if len(non_null_series) > 0:
+                # Compute min/max if not already cached
+                if non_null_min is None:
+                    non_null_min = non_null_series.min()
+                    non_null_max = non_null_series.max()
+
                 # Suggest binning for columns with meaningful range (not single value)
-                col_min = non_null_series.min()
-                col_max = non_null_series.max()
+                col_min = non_null_min
+                col_max = non_null_max
 
                 if col_min < col_max:
                     # Use describe() percentiles to suggest bins
@@ -555,7 +587,8 @@ def analyze_column_data(
     integer_analysis = ''
 
     if is_float_type:
-        integer_value_count = series.apply(lambda x: x.is_integer()).sum()
+        # Vectorized count of integer-like float values
+        integer_value_count = int((series % 1 == 0).sum())
         non_integer_value_count = series_length - integer_value_count
         integer_analysis = f"""Integer values:     {integer_value_count}
 Non-integer values: {non_integer_value_count}"""
