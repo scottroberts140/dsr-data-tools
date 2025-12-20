@@ -392,12 +392,15 @@ def generate_recommendations(
 
                     # Determine if conversion to int64 is possible (all values are integers after rounding)
                     can_convert_to_int = (
-                        col_max_decimal_places == 0 and (rounded_series % 1 == 0).all()
+                        col_max_decimal_places == 0 and (
+                            rounded_series % 1 == 0).all()
                     )
 
                     # Ensure typed float values for min/max to satisfy type checkers
-                    min_val = float(non_null_min) if non_null_min is not None else float('nan')
-                    max_val = float(non_null_max) if non_null_max is not None else float('nan')
+                    min_val = float(
+                        non_null_min) if non_null_min is not None else float('nan')
+                    max_val = float(
+                        non_null_max) if non_null_max is not None else float('nan')
 
                     rec = DecimalPrecisionRecommendation(
                         type=RecommendationType.DECIMAL_PRECISION_OPTIMIZATION,
@@ -861,4 +864,3 @@ def generate_interaction_recommendations(
                 )
 
     return interactions
-    return df_info, recommendations
