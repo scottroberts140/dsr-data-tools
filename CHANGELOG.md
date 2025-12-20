@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.6] - 2025-12-20
+
+### Fixed
+- Fixed runtime error in `generate_interaction_recommendations` when `target_column` is None
+  - Priority score for Status-Impact interactions now correctly uses computed variable instead of undefined mi_series reference
+  - Ensures graceful fallback to 0.0 priority when no target column provided
+
 ## [0.0.5] - 2025-12-20
 
 ### Added
