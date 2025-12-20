@@ -5,6 +5,8 @@ import pytest
 import pandas as pd
 import numpy as np
 from dsr_data_tools import analysis
+from dsr_data_tools.analysis import generate_recommendations, analyze_dataset
+from dsr_data_tools.enums import RecommendationType
 
 
 @pytest.fixture
@@ -33,8 +35,83 @@ class TestAnalysisModule:
 
     def test_generate_recommendations(self, sample_dataframe):
         """Test recommendation generation."""
-        # Add tests based on your specific recommendation functions
-        pass
+        recs = generate_recommendations(sample_dataframe)
+        assert isinstance(recs, dict)
+
+    def test_binning_thresholds_int(self):
+        """Binning triggers with int thresholds for unique counts."""
+        # Create a numeric column with 50 unique values
+        df = pd.DataFrame({
+            'num_col': np.arange(50, dtype=float),
+            'target': np.random.randint(0, 2, size=50)
+        })
+        recs = generate_recommendations(
+            df,
+            target_column='target',
+            min_binning_unique_values=10,
+            default_min_binning_unique_values=10,
+            max_binning_unique_values=100,
+            default_max_binning_unique_values=100
+        )
+        assert 'num_col' in recs
+        assert 'binning' in recs['num_col']
+        assert recs['num_col']['binning'].type == RecommendationType.BINNING
+
+    def test_binning_thresholds_dict(self):
+        """Binning uses per-column dict thresholds when provided."""
+        # Create a numeric column with 110 unique values
+        df = pd.DataFrame({
+            'x': np.arange(110, dtype=float),
+            'y': np.arange(20, dtype=float),
+        })
+        recs = generate_recommendations(
+            df,
+            min_binning_unique_values={'x': 100},
+            default_min_binning_unique_values=10,
+            max_binning_unique_values={'x': 120},
+            default_max_binning_unique_values=100
+        )
+        assert 'x' in recs and 'binning' in recs['x']
+        assert recs['x']['binning'].type == RecommendationType.BINNING
+        # 'y' should also qualify under defaults
+        assert 'y' in recs and 'binning' in recs['y']
+
+    def test_int64_conversion_vectorized(self):
+        """Float column with integer-like values triggers int64 conversion recommendation."""
+        df = pd.DataFrame({
+            'ints_as_float': np.array([1.0, 2.0, 3.0, 4.0], dtype=float)
+        })
+        recs = generate_recommendations(df)
+        assert 'ints_as_float' in recs
+        assert 'int64_conversion' in recs['ints_as_float']
+        assert recs['ints_as_float']['int64_conversion'].type == RecommendationType.INT64_CONVERSION
+
+    def test_decimal_precision_convert_to_int(self):
+        """Rounding to 0 with integer-like float values sets convert_to_int True."""
+        df = pd.DataFrame({
+            'vals': np.array([10.0, 20.0, 30.0, 40.0], dtype=float)
+        })
+        recs = generate_recommendations(
+            df,
+            max_decimal_places=0
+        )
+        assert 'vals' in recs
+        assert 'decimal_precision_optimization' in recs['vals']
+        dp = recs['vals']['decimal_precision_optimization']
+        assert dp.type == RecommendationType.DECIMAL_PRECISION_OPTIMIZATION
+        assert dp.convert_to_int is True
+
+    def test_value_replacement_detection(self):
+        """Object column with numeric and placeholder values triggers replacement recommendation."""
+        df = pd.DataFrame({
+            'mixed': ['10', '20', 'N/A', 'tbd', '30', None]
+        })
+        recs = generate_recommendations(df)
+        assert 'mixed' in recs
+        assert 'value_replacement' in recs['mixed']
+        vr = recs['mixed']['value_replacement']
+        assert vr.type == RecommendationType.VALUE_REPLACEMENT
+        assert any(v in vr.non_numeric_values for v in ['N/A', 'tbd'])
 
 
 class TestDataValidation:
