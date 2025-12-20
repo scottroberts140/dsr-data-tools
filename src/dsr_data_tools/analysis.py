@@ -462,13 +462,13 @@ def generate_recommendations(
         # but not so many that binning loses information (between ~10 and ~1000 unique values)
         if is_numeric and 10 <= unique_count <= 1000:
             non_null_series = series.dropna()
-            
+
             # Check if column has reasonable variance and distribution for binning
             if len(non_null_series) > 0:
                 # Suggest binning for columns with meaningful range (not single value)
                 col_min = non_null_series.min()
                 col_max = non_null_series.max()
-                
+
                 if col_min < col_max:
                     # Use describe() percentiles to suggest bins
                     desc = series.describe()
@@ -693,11 +693,14 @@ def generate_interaction_recommendations(
     binary_cols = [col for col in usable_cols if df[col].nunique() == 2]
 
     # Filter high-variance continuous columns (must have reasonable cardinality and variance)
-    high_variance_cols = [
-        col for col in usable_cols
-        if df[col].nunique() > 10 and col not in binary_cols
-        and df[col].var() > df[usable_cols].var().quantile(0.6)
-    ]
+    high_variance_cols = []
+    for col in usable_cols:
+        if df[col].nunique() > 10 and col not in binary_cols:
+            col_var = df[col].var()
+            quantile_var = df[usable_cols].var().quantile(0.6)
+            if isinstance(col_var, (int, float)) and isinstance(quantile_var, (int, float)):
+                if col_var > quantile_var:
+                    high_variance_cols.append(col)
 
     for binary_col in binary_cols:
         for cont_col in high_variance_cols:
