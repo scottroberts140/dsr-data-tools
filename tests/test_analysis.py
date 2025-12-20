@@ -63,7 +63,8 @@ class TestAnalysisModule:
         """Binning uses per-column dict thresholds when provided."""
         # Create columns with consistent lengths and controlled unique counts
         # 'x': 100 unique values spread across 110 rows (avoid non_informative)
-        x = np.concatenate([np.arange(100, dtype=float), np.arange(10, dtype=float)])
+        x = np.concatenate([np.arange(100, dtype=float),
+                           np.arange(10, dtype=float)])
         # 'y': 20 unique values spread across 110 rows
         y = np.tile(np.arange(20, dtype=float), 6)[:110]
         df = pd.DataFrame({'x': x, 'y': y})
@@ -110,7 +111,8 @@ class TestAnalysisModule:
     def test_value_replacement_detection(self):
         """Object column with numeric and placeholder values triggers replacement recommendation."""
         # Create enough rows to keep unique ratio below high-cardinality threshold
-        mixed_vals = ['10', '20', 'N/A', 'tbd', '30', None] * 8  # 48 rows, 6 unique
+        mixed_vals = ['10', '20', 'N/A', 'tbd',
+                      '30', None] * 8  # 48 rows, 6 unique
         df = pd.DataFrame({'mixed': mixed_vals})
         recs = generate_recommendations(df)
         assert 'mixed' in recs

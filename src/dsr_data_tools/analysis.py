@@ -725,36 +725,30 @@ def analyze_dataset(
     return df_info, recommendations
 
 
-def generate_interaction_recommendations(
-    df: pd.DataFrame, exclude_columns: list[str] | None = None
+def generate_interaction_recommendations_orig(
+    df: pd.DataFrame,
+    target_column: str | None = None,
+    exclude_columns: list[str] | None = None,
+    random_state: int | None = 42
 ) -> list[FeatureInteractionRecommendation]:
-    """Generate recommended feature interactions based on statistical patterns.
-
+    """Deprecated: Original heuristic-based feature interaction generator.
+    
+    This is kept for reference only. Use generate_interaction_recommendations()
+    for statistically-guided interactions using Mutual Information and Pearson Correlation.
+    
+    Original docstring (deprecated):
     Analyzes numeric and categorical columns to suggest meaningful interactions
     based on three rules:
-    1. Status-Impact: Binary × High-variance continuous
+    1. Status-Impact: Binary x High-variance continuous
     2. Resource Density: Continuous / Continuous (financial ratios)
-    3. Product Utilization: Count × Duration (frequency/rate metrics)
+    3. Product Utilization: Count x Duration (frequency/rate metrics)
 
     Args:
         df (pd.DataFrame): DataFrame to analyze for interaction opportunities.
+        target_column (str | None): Unused in original implementation (kept for signature compatibility).
         exclude_columns (list[str] | None): Columns to exclude from interactions
             (e.g., target column, ID columns). Default is None.
-
-    Returns:
-        list[FeatureInteractionRecommendation]: List of recommended interactions
-            (may be empty if no suitable candidates found).
-
-    Example:
-        >>> df = pd.DataFrame({
-        ...     'Balance': [1000, 5000, 10000],
-        ...     'IsActiveMember': [0, 1, 1],
-        ...     'EstimatedSalary': [50000, 75000, 100000],
-        ...     'Target': [0, 1, 0]
-        ... })
-        >>> interactions = generate_interaction_recommendations(df, exclude_columns=['Target'])
-        >>> for rec in interactions:
-        ...     rec.info()
+        random_state (int | None): Unused in original implementation (kept for signature compatibility).
     """
     import numpy as np
 
@@ -860,6 +854,182 @@ def generate_interaction_recommendations(
                         description=f"Product Utilization rate: {count_col} / {dur_col}",
                         rationale=f"Create a rate metric '{count_col}' per '{dur_col}' to measure "
                         f"adoption velocity and utilization intensity",
+                    )
+                )
+
+    return interactions
+
+
+def generate_interaction_recommendations(
+    df: pd.DataFrame,
+    target_column: str | None = None,
+    exclude_columns: list[str] | None = None,
+    random_state: int | None = 42
+) -> list[FeatureInteractionRecommendation]:
+    """Generate recommended feature interactions using statistical guidance.
+
+    Analyzes numeric columns to suggest meaningful interactions based on three
+    statistically-guided rules:
+
+    1. **Status-Impact (Mutual Information)**: Binary x High-variance continuous
+       - Uses Mutual Information (MI) to identify which binary/status columns
+         are most informative about the target outcome.
+       - Only pairs high-information binary columns with high-variance
+         continuous columns, ensuring interactions align with target prediction.
+
+    2. **Resource Density (Pearson Correlation)**: Continuous / Continuous
+       - Computes absolute Pearson correlation between continuous columns.
+       - Creates ratio features only for highly correlated pairs (r > 0.7),
+         indicating complementary financial or resource metrics.
+
+    3. **Product Utilization (Distribution-Based)**: Discrete / Continuous
+       - Identifies discrete columns (2-20 unique values) representing counts
+         and continuous columns (>20 unique values) representing duration/time.
+       - Creates rate features to measure utilization intensity over time.
+
+    Args:
+        df (pd.DataFrame): DataFrame to analyze for interaction opportunities.
+        target_column (str | None): Target column for statistical guidance.
+            If provided, MI scores are computed relative to the target,
+            and Rule 1 uses only statistically significant binary columns.
+            If None, Rule 1 falls back to finding high-variance columns.
+        exclude_columns (list[str] | None): Columns to exclude from interactions
+            (e.g., ID columns). Default is None.
+        random_state (int | None): Random state for Mutual Information calculation.
+            Default is 42 for reproducibility.
+
+    Returns:
+        list[FeatureInteractionRecommendation]: List of recommended interactions
+            (may be empty if no suitable candidates found).
+
+    Example:
+        >>> df = pd.DataFrame({
+        ...     'Balance': [1000, 5000, 10000],
+        ...     'IsActiveMember': [0, 1, 1],
+        ...     'EstimatedSalary': [50000, 75000, 100000],
+        ...     'Target': [0, 1, 0]
+        ... })
+        >>> interactions = generate_interaction_recommendations(
+        ...     df, target_column='Target', exclude_columns=['Target']
+        ... )
+        >>> for rec in interactions:
+        ...     rec.info()
+    """
+    import numpy as np
+    from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+
+    interactions: list[FeatureInteractionRecommendation] = []
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
+    if len(numeric_cols) < 2:
+        return interactions
+
+    # Initialize exclude list
+    if exclude_columns is None:
+        exclude_columns = []
+
+    # Exclude ID-like columns and specified columns
+    id_keywords = ["id", "row", "index", "number", "code"]
+    exclude_cols = set(exclude_columns)
+    exclude_cols.update(col for col in numeric_cols if any(
+        kw in col.lower() for kw in id_keywords))
+
+    usable_cols = [col for col in numeric_cols if col not in exclude_cols]
+
+    if len(usable_cols) < 2:
+        return interactions
+
+    # Rule 1: Status-Impact (Categorical × High-variance continuous)
+    # Instead of hardcoded keywords, we find the categorical column most
+    # statistically related to our target outcome.
+    binary_cols = [col for col in usable_cols if df[col].nunique() == 2]
+
+    strong_binary_cols = []
+    if target_column and target_column in df.columns and binary_cols:
+        # Calculate Mutual Information between binary cols and the target
+        # This identifies which status actually 'matters' for the outcome
+        y = df[target_column].dropna()
+        X = df[binary_cols].loc[y.index]
+
+        # Determine if target is classification or regression
+        is_classification = df[target_column].nunique() < 10
+        mi_scores = mutual_info_classif(X, y, random_state=random_state) if is_classification else mutual_info_regression(
+            X, y, random_state=random_state)
+
+        # Keep columns with a MI score above a threshold (e.g., top 50th percentile)
+        mi_series = pd.Series(mi_scores, index=binary_cols)
+        strong_binary_cols = mi_series[mi_series >
+                                       mi_series.median()].index.tolist()
+    else:
+        # Fallback to current behavior if no target is provided
+        strong_binary_cols = binary_cols
+
+    # Filter high-variance continuous columns (must have reasonable cardinality and variance)
+    high_variance_cols = []
+    for col in usable_cols:
+        if df[col].nunique() > 10 and col not in binary_cols:
+            col_var = df[col].var()
+            quantile_var = df[usable_cols].var().quantile(0.6)
+            if isinstance(col_var, (int, float)) and isinstance(quantile_var, (int, float)):
+                if col_var > quantile_var:
+                    high_variance_cols.append(col)
+
+    for binary_col in strong_binary_cols:
+        for cont_col in high_variance_cols:
+            if binary_col != cont_col:
+                interactions.append(
+                    FeatureInteractionRecommendation(
+                        column_name=cont_col,
+                        column_name_2=binary_col,
+                        interaction_type=InteractionType.STATUS_IMPACT,
+                        operation="*",
+                        description=f"Status-Impact interaction: {cont_col} × {binary_col}",
+                        rationale=f"Multiply high-variance '{cont_col}' by binary status '{binary_col}' "
+                        f"to distinguish behavior based on membership status",
+                    )
+                )
+
+    # Rule 2: Resource Density (Continuous / Continuous)
+    continuous_cols = [col for col in usable_cols if df[col].nunique() > 20]
+
+    if len(continuous_cols) >= 2:
+        # Calculate correlation matrix for continuous columns
+        corr_matrix = df[continuous_cols].corr().abs()
+
+        for i, col1 in enumerate(continuous_cols):
+            for col2 in continuous_cols[i + 1:]:
+                # If columns are highly correlated (> 0.7), they are good ratio candidates
+                if corr_matrix.loc[col1, col2] > 0.7:
+                    # Avoid division by zero
+                    if (df[col2] != 0).sum() / len(df) > 0.9:
+                        interactions.append(
+                            FeatureInteractionRecommendation(
+                                column_name=col1,
+                                column_name_2=col2,
+                                interaction_type=InteractionType.RESOURCE_DENSITY,
+                                operation="/",
+                                description=f"Resource Density ratio: {col1} / {col2}",
+                                rationale=f"High correlation ({corr_matrix.loc[col1, col2]:.2f}) detected between "
+                                f"'{col1}' and '{col2}', suggesting a meaningful ratio relationship."
+                            )
+                        )
+
+    # Rule 3: Product Utilization (Discrete / Continuous)
+    discrete_cols = [col for col in usable_cols if 2 < df[col].nunique() <= 20]
+    duration_like_cols = [col for col in usable_cols if df[col].nunique() > 20]
+
+    for count_col in discrete_cols:
+        for dur_col in duration_like_cols:
+            if (df[dur_col] != 0).sum() / len(df) > 0.9:
+                interactions.append(
+                    FeatureInteractionRecommendation(
+                        column_name=count_col,
+                        column_name_2=dur_col,
+                        interaction_type=InteractionType.PRODUCT_UTILIZATION,
+                        operation="/",
+                        description=f"Product Utilization rate: {count_col} / {dur_col}",
+                        rationale=f"Combining discrete count '{count_col}' with continuous duration "
+                        f"'{dur_col}' to measure utilization intensity over time."
                     )
                 )
 

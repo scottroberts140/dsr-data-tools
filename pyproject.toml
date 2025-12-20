@@ -27,6 +27,7 @@ dependencies = [
     "dsr-utils>=0.0.1",
     "numpy>=2.0.0",
     "pandas>=2.0.0",
+    "scikit-learn>=1.0.0",
 ]
 
 [project.optional-dependencies]

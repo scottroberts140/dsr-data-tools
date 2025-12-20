@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] - 2025-12-20
 
 ### Added
+- **Statistically Guided Feature Interactions**: Refactored `generate_interaction_recommendations()` to use statistical measures:
+  - **Rule 1 (Status-Impact)**: Uses Mutual Information to identify binary columns most predictive of target, paired with high-variance continuous columns
+  - **Rule 2 (Resource Density)**: Uses Pearson Correlation (>0.7) to identify complementary continuous columns for ratio features
+  - **Rule 3 (Product Utilization)**: Distribution-based logic combining discrete counts (2-20 unique) with continuous duration (>20 unique) for rate features
+  - New parameters: `target_column` for statistical guidance, `random_state` for reproducibility
+  - Original heuristic-based version kept as `generate_interaction_recommendations_orig()` for reference
 - Configurable binning thresholds via `min_binning_unique_values` and `max_binning_unique_values` parameters
   - Supports both global `int` values and per-column `dict[str, int]` configurations
   - Added `default_min_binning_unique_values` (default: 10) and `default_max_binning_unique_values` (default: 1000)
@@ -23,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Integer conversion detection
   - Decimal precision optimization
   - Value replacement detection
+- `scikit-learn` added to dependencies for statistical feature selection
 
 ### Changed
 - **Breaking**: Columns flagged as `non_informative` now short-circuit all other recommendation checks
@@ -33,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Applied in int64 conversion, decimal precision, and column analysis functions
 - Enhanced documentation with Benchmarks section in README
 - Updated docstrings for `generate_recommendations()` and `analyze_dataset()` with detailed parameter descriptions
+- `generate_interaction_recommendations()` now accepts `target_column` and `random_state` parameters for statistically-guided recommendations
 
 ### Fixed
 - Variance comparison type errors when detecting high-variance columns

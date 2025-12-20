@@ -49,8 +49,10 @@ def run_benchmark(n: int = 2_000_000) -> None:
     print(f"Size: {n:,}")
     print(f"apply is_integer sum: {count_apply}, time: {apply_time:.3f}s")
     print(f"vectorized modulo sum: {count_vec}, time: {vec_time:.3f}s")
-    print(f"rounded apply all: {all_int_apply}, time: {rounded_apply_time:.3f}s")
-    print(f"rounded vectorized all: {all_int_vec}, time: {rounded_vec_time:.3f}s")
+    print(
+        f"rounded apply all: {all_int_apply}, time: {rounded_apply_time:.3f}s")
+    print(
+        f"rounded vectorized all: {all_int_vec}, time: {rounded_vec_time:.3f}s")
     print(f"Speedup (sum): {apply_time/vec_time:.1f}x")
     print(f"Speedup (rounded all): {rounded_apply_time/rounded_vec_time:.1f}x")
 

@@ -7,6 +7,7 @@ Data analysis and exploration tools for exploratory data analysis (EDA).
 - **Dataset Analysis**: Comprehensive statistical summaries and data quality assessment
 - **Data Exploration**: Tools for understanding data distributions, correlations, and patterns
 - **Quality Metrics**: Missing value detection, data type analysis, and anomaly identification
+- **Statistically Guided Feature Interactions**: Automatic discovery of meaningful feature interactions using Mutual Information and Pearson Correlation
 
 ## Installation
 
@@ -26,6 +27,14 @@ df = pd.read_csv('data.csv')
 # Perform comprehensive analysis
 analyze_dataset(df)
 ```
+
+## Performance
+
+This library is optimized for large-scale data processing using vectorized operations.
+
+* Vectorized Integer Checks: Optimized from $O(N)$ Python-level application to vectorized modulo operations, resulting in a __5-6× speed increase__.
+
+* Cached Data Scans: Implemented caching for common operations like dropna() and unique() to ensure each data column is scanned as few times as possible, maintaining high efficiency for wide datasets.
 
 ## Benchmarks
 
@@ -49,9 +58,10 @@ make benchmark N=5000000      # custom size
 
 ## Requirements
 
-- Python >= 3.9
+- Python >= 3.10
 - pandas
 - numpy
+- scikit-learn
 - dsr-utils
 
 ## License
