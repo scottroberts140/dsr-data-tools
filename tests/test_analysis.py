@@ -40,10 +40,12 @@ class TestAnalysisModule:
 
     def test_binning_thresholds_int(self):
         """Binning triggers with int thresholds for unique counts."""
-        # Create a numeric column with 50 unique values
+        # Create a numeric column with duplicates to avoid non_informative
+        # 25 unique values repeated twice -> 50 rows
+        num_vals = np.arange(25, dtype=float).repeat(2)
         df = pd.DataFrame({
-            'num_col': np.arange(50, dtype=float),
-            'target': np.random.randint(0, 2, size=50)
+            'num_col': num_vals,
+            'target': np.random.randint(0, 2, size=num_vals.size)
         })
         recs = generate_recommendations(
             df,
@@ -59,11 +61,12 @@ class TestAnalysisModule:
 
     def test_binning_thresholds_dict(self):
         """Binning uses per-column dict thresholds when provided."""
-        # Create a numeric column with 110 unique values
-        df = pd.DataFrame({
-            'x': np.arange(110, dtype=float),
-            'y': np.arange(20, dtype=float),
-        })
+        # Create columns with consistent lengths and controlled unique counts
+        # 'x': 100 unique values spread across 110 rows (avoid non_informative)
+        x = np.concatenate([np.arange(100, dtype=float), np.arange(10, dtype=float)])
+        # 'y': 20 unique values spread across 110 rows
+        y = np.tile(np.arange(20, dtype=float), 6)[:110]
+        df = pd.DataFrame({'x': x, 'y': y})
         recs = generate_recommendations(
             df,
             min_binning_unique_values={'x': 100},
@@ -78,8 +81,9 @@ class TestAnalysisModule:
 
     def test_int64_conversion_vectorized(self):
         """Float column with integer-like values triggers int64 conversion recommendation."""
+        # Include duplicates to avoid non_informative on numeric columns
         df = pd.DataFrame({
-            'ints_as_float': np.array([1.0, 2.0, 3.0, 4.0], dtype=float)
+            'ints_as_float': np.array([1.0, 2.0, 2.0, 3.0, 3.0, 4.0], dtype=float)
         })
         recs = generate_recommendations(df)
         assert 'ints_as_float' in recs
@@ -88,8 +92,10 @@ class TestAnalysisModule:
 
     def test_decimal_precision_convert_to_int(self):
         """Rounding to 0 with integer-like float values sets convert_to_int True."""
+        # Use non-integer floats so int64 conversion does not trigger,
+        # but rounding to 0 makes them integers (convert_to_int True)
         df = pd.DataFrame({
-            'vals': np.array([10.0, 20.0, 30.0, 40.0], dtype=float)
+            'vals': np.array([10.1, 20.0, 20.1, 30.0, 30.2, 40.0, 20.0, 30.0], dtype=float)
         })
         recs = generate_recommendations(
             df,
@@ -103,9 +109,9 @@ class TestAnalysisModule:
 
     def test_value_replacement_detection(self):
         """Object column with numeric and placeholder values triggers replacement recommendation."""
-        df = pd.DataFrame({
-            'mixed': ['10', '20', 'N/A', 'tbd', '30', None]
-        })
+        # Create enough rows to keep unique ratio below high-cardinality threshold
+        mixed_vals = ['10', '20', 'N/A', 'tbd', '30', None] * 8  # 48 rows, 6 unique
+        df = pd.DataFrame({'mixed': mixed_vals})
         recs = generate_recommendations(df)
         assert 'mixed' in recs
         assert 'value_replacement' in recs['mixed']
