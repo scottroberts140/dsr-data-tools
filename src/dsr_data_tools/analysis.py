@@ -457,22 +457,34 @@ def generate_recommendations(
                 )
                 col_recommendations['class_imbalance'] = rec
 
-        # 7. Suggest binning for numeric columns (e.g., Age)
-        if is_numeric and col_name.lower() in ['age', 'years']:
-            # Use describe() percentiles to suggest bins
-            desc = series.describe()
-            bins = [series.min() - 1, desc['25%'], desc['50%'],
-                    desc['75%'], series.max()]
-            labels = ['Low', 'Medium_Low', 'Medium_High', 'High']
+        # 7. Suggest binning for continuous numeric columns with moderate cardinality
+        # Candidates for binning: numeric columns with more unique values than expected categories
+        # but not so many that binning loses information (between ~10 and ~1000 unique values)
+        if is_numeric and 10 <= unique_count <= 1000:
+            non_null_series = series.dropna()
+            
+            # Check if column has reasonable variance and distribution for binning
+            if len(non_null_series) > 0:
+                # Suggest binning for columns with meaningful range (not single value)
+                col_min = non_null_series.min()
+                col_max = non_null_series.max()
+                
+                if col_min < col_max:
+                    # Use describe() percentiles to suggest bins
+                    desc = series.describe()
+                    bins = [col_min - 0.1 * abs(col_max - col_min),
+                            desc['25%'], desc['50%'],
+                            desc['75%'], col_max + 0.1 * abs(col_max - col_min)]
+                    labels = ['Very_Low', 'Low', 'Medium', 'High', 'Very_High']
 
-            rec = BinningRecommendation(
-                type=RecommendationType.BINNING,
-                column_name=col_name,
-                description=f"Column '{col_name}' could be binned into {len(labels)} categories.",
-                bins=bins,
-                labels=labels
-            )
-            col_recommendations['binning'] = rec
+                    rec = BinningRecommendation(
+                        type=RecommendationType.BINNING,
+                        column_name=col_name,
+                        description=f"Column '{col_name}' ({unique_count} unique values) could be binned into {len(labels)} categories for better feature representation.",
+                        bins=bins,
+                        labels=labels
+                    )
+                    col_recommendations['binning'] = rec
 
         if col_recommendations:
             recommendations[col_name] = col_recommendations
