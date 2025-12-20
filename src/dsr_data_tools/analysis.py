@@ -759,6 +759,9 @@ def generate_interaction_recommendations(
             If provided, MI scores are computed relative to the target,
             and Rule 1 uses only statistically significant binary columns.
             If None, Rule 1 falls back to finding high-variance columns.
+        top_n (int | None): Maximum number of interactions to return, sorted by
+            priority_score in descending order. If None, returns all interactions.
+            Default is 20.
         exclude_columns (list[str] | None): Columns to exclude from interactions
             (e.g., ID columns). Default is None.
         random_state (int | None): Random state for Mutual Information calculation.
@@ -843,6 +846,8 @@ def generate_interaction_recommendations(
     for binary_col in strong_binary_cols:
         for cont_col in high_variance_cols:
             if binary_col != cont_col:
+                priority_score = mi_series[binary_col] if target_column else 0.0
+
                 interactions.append(
                     FeatureInteractionRecommendation(
                         column_name=cont_col,
@@ -852,6 +857,7 @@ def generate_interaction_recommendations(
                         description=f"Status-Impact interaction: {cont_col} × {binary_col}",
                         rationale=f"Multiply high-variance '{cont_col}' by binary status '{binary_col}' "
                         f"to distinguish behavior based on membership status",
+                        priority_score=mi_series[binary_col]
                     )
                 )
 
@@ -864,8 +870,9 @@ def generate_interaction_recommendations(
 
         for i, col1 in enumerate(continuous_cols):
             for col2 in continuous_cols[i + 1:]:
+                corr = corr_matrix.loc[col1, col2]
                 # If columns are highly correlated (> 0.7), they are good ratio candidates
-                if corr_matrix.loc[col1, col2] > 0.7:
+                if corr > 0.7:
                     # Avoid division by zero
                     if (df[col2] != 0).sum() / len(df) > 0.9:
                         interactions.append(
@@ -876,7 +883,8 @@ def generate_interaction_recommendations(
                                 operation="/",
                                 description=f"Resource Density ratio: {col1} / {col2}",
                                 rationale=f"High correlation ({corr_matrix.loc[col1, col2]:.2f}) detected between "
-                                f"'{col1}' and '{col2}', suggesting a meaningful ratio relationship."
+                                f"'{col1}' and '{col2}', suggesting a meaningful ratio relationship.",
+                                priority_score=corr
                             )
                         )
 
@@ -887,6 +895,33 @@ def generate_interaction_recommendations(
     for count_col in discrete_cols:
         for dur_col in duration_like_cols:
             if (df[dur_col] != 0).sum() / len(df) > 0.9:
+                priority_score = 0.0
+
+                if target_column:
+                    # Create the temporary rate feature
+                    temp_rate = df[count_col] / df[dur_col]
+
+                    # Alignment and Cleaning
+                    # MI cannot handle NANs or Infinite values
+                    valid_idx = temp_rate.replace(
+                        [np.inf, -np.inf], np.nan).dropna().index
+                    intersect_idx = valid_idx.intersection(y.index)
+
+                    if len(intersect_idx) > 0:
+                        X_temp = temp_rate.loc[intersect_idx].values.reshape(
+                            -1, 1)
+                        y_temp = y.loc[intersect_idx]
+
+                        # Calculate MI for this specific interaction
+                        if is_classification:
+                            mi_val = mutual_info_classif(
+                                X_temp, y_temp, random_state=random_state)
+                        else:
+                            mi_val = mutual_info_regression(
+                                X_temp, y_temp, random_state=random_state)
+
+                        priority_score = float(mi_val[0])
+
                 interactions.append(
                     FeatureInteractionRecommendation(
                         column_name=count_col,
@@ -895,9 +930,13 @@ def generate_interaction_recommendations(
                         operation="/",
                         description=f"Product Utilization rate: {count_col} / {dur_col}",
                         rationale=f"Combining discrete count '{count_col}' with continuous duration "
-                        f"'{dur_col}' to measure utilization intensity over time."
+                        f"'{dur_col}' to measure utilization intensity over time.",
+                        priority_score=priority_score
                     )
                 )
+
+    # Sort interactions from most informative to least informative
+    interactions.sort(key=lambda x: x.priority_score, reverse=True)
 
     if top_n and len(interactions) > top_n:
         return interactions[:top_n]

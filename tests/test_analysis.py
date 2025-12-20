@@ -5,7 +5,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from dsr_data_tools import analysis
-from dsr_data_tools.analysis import generate_recommendations, analyze_dataset
+from dsr_data_tools.analysis import generate_recommendations, analyze_dataset, generate_interaction_recommendations
 from dsr_data_tools.enums import RecommendationType
 
 
@@ -120,6 +120,75 @@ class TestAnalysisModule:
         vr = recs['mixed']['value_replacement']
         assert vr.type == RecommendationType.VALUE_REPLACEMENT
         assert any(v in vr.non_numeric_values for v in ['N/A', 'tbd'])
+
+    def test_interaction_recommendations_sorted_by_priority(self):
+        """Verify that interaction recommendations are sorted by priority_score in descending order."""
+        # Create a DataFrame with binary, continuous, and discrete columns
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'binary1': np.random.randint(0, 2, 100),
+            'binary2': np.random.randint(0, 2, 100),
+            'continuous1': np.random.randn(100) * 100 + 500,
+            'continuous2': np.random.randn(100) * 50 + 200,
+            'discrete': np.random.randint(1, 15, 100),
+            'target': np.random.randint(0, 2, 100)
+        })
+        
+        interactions = generate_interaction_recommendations(
+            df, 
+            target_column='target',
+            exclude_columns=['target'],
+            random_state=42
+        )
+        
+        # Verify we got some interactions
+        assert len(interactions) > 0
+        
+        # Verify they are sorted in descending order by priority_score
+        priority_scores = [rec.priority_score for rec in interactions]
+        assert priority_scores == sorted(priority_scores, reverse=True), \
+            "Interactions should be sorted by priority_score in descending order"
+
+    def test_interaction_recommendations_top_n_limit(self):
+        """Verify that top_n parameter limits the number of returned interactions."""
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'binary1': np.random.randint(0, 2, 100),
+            'binary2': np.random.randint(0, 2, 100),
+            'continuous1': np.random.randn(100) * 100 + 500,
+            'continuous2': np.random.randn(100) * 50 + 200,
+            'continuous3': np.random.randn(100) * 75 + 300,
+            'discrete1': np.random.randint(1, 10, 100),
+            'discrete2': np.random.randint(1, 15, 100),
+            'target': np.random.randint(0, 2, 100)
+        })
+        
+        # Get all interactions
+        all_interactions = generate_interaction_recommendations(
+            df,
+            target_column='target',
+            exclude_columns=['target'],
+            top_n=None,
+            random_state=42
+        )
+        
+        # Get limited interactions
+        top_3 = generate_interaction_recommendations(
+            df,
+            target_column='target',
+            exclude_columns=['target'],
+            top_n=3,
+            random_state=42
+        )
+        
+        # Verify top_n works
+        assert len(top_3) == min(3, len(all_interactions))
+        
+        # Verify top_n returns the highest priority interactions
+        if len(all_interactions) >= 3:
+            assert top_3[0].priority_score == all_interactions[0].priority_score
+            assert top_3[1].priority_score == all_interactions[1].priority_score
+            assert top_3[2].priority_score == all_interactions[2].priority_score
 
 
 class TestDataValidation:
