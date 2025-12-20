@@ -788,6 +788,9 @@ class FeatureInteractionRecommendation(Recommendation):
     derived_name: str = ""
     """Name for the derived feature (EDITABLE)"""
 
+    priority_score: float = 0.0
+    """Priority score for the interaction (0.0-1.0 scale, higher = more important)"""
+
     type: RecommendationType = field(
         default=RecommendationType.FEATURE_INTERACTION, init=False)
     """Recommendation type (automatically set to FEATURE_INTERACTION)"""
@@ -842,4 +845,5 @@ class FeatureInteractionRecommendation(Recommendation):
         print(
             f"    Operation: {operation_name} ('{self.column_name}' {self.operation} '{self.column_name_2}')")
         print(f"    New Feature: '{self.derived_name}' (EDITABLE)")
+        print(f"    Priority Score: {self.priority_score:.2f}")
         print(f"    Rationale: {self.rationale}")

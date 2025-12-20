@@ -728,6 +728,7 @@ def analyze_dataset(
 def generate_interaction_recommendations(
     df: pd.DataFrame,
     target_column: str | None = None,
+    top_n: int | None = 20,
     exclude_columns: list[str] | None = None,
     random_state: int | None = 42
 ) -> list[FeatureInteractionRecommendation]:
@@ -897,5 +898,8 @@ def generate_interaction_recommendations(
                         f"'{dur_col}' to measure utilization intensity over time."
                     )
                 )
+
+    if top_n and len(interactions) > top_n:
+        return interactions[:top_n]
 
     return interactions
