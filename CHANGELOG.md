@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Rule 2 (Resource Density)**: Uses Pearson Correlation (>0.7) to identify complementary continuous columns for ratio features
   - **Rule 3 (Product Utilization)**: Distribution-based logic combining discrete counts (2-20 unique) with continuous duration (>20 unique) for rate features
   - New parameters: `target_column` for statistical guidance, `random_state` for reproducibility
-  - Original heuristic-based version kept as `generate_interaction_recommendations_orig()` for reference
 - Configurable binning thresholds via `min_binning_unique_values` and `max_binning_unique_values` parameters
   - Supports both global `int` values and per-column `dict[str, int]` configurations
   - Added `default_min_binning_unique_values` (default: 10) and `default_max_binning_unique_values` (default: 1000)
