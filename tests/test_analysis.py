@@ -133,17 +133,17 @@ class TestAnalysisModule:
             'discrete': np.random.randint(1, 15, 100),
             'target': np.random.randint(0, 2, 100)
         })
-        
+
         interactions = generate_interaction_recommendations(
-            df, 
+            df,
             target_column='target',
             exclude_columns=['target'],
             random_state=42
         )
-        
+
         # Verify we got some interactions
         assert len(interactions) > 0
-        
+
         # Verify they are sorted in descending order by priority_score
         priority_scores = [rec.priority_score for rec in interactions]
         assert priority_scores == sorted(priority_scores, reverse=True), \
@@ -162,7 +162,7 @@ class TestAnalysisModule:
             'discrete2': np.random.randint(1, 15, 100),
             'target': np.random.randint(0, 2, 100)
         })
-        
+
         # Get all interactions
         all_interactions = generate_interaction_recommendations(
             df,
@@ -171,7 +171,7 @@ class TestAnalysisModule:
             top_n=None,
             random_state=42
         )
-        
+
         # Get limited interactions
         top_3 = generate_interaction_recommendations(
             df,
@@ -180,10 +180,10 @@ class TestAnalysisModule:
             top_n=3,
             random_state=42
         )
-        
+
         # Verify top_n works
         assert len(top_3) == min(3, len(all_interactions))
-        
+
         # Verify top_n returns the highest priority interactions
         if len(all_interactions) >= 3:
             assert top_3[0].priority_score == all_interactions[0].priority_score

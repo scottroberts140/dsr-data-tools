@@ -769,7 +769,8 @@ def generate_interaction_recommendations(
 
     Returns:
         list[FeatureInteractionRecommendation]: List of recommended interactions
-            (may be empty if no suitable candidates found).
+            sorted by priority_score in descending order (highest priority first).
+            Returns empty list if no suitable candidates found.
 
     Example:
         >>> df = pd.DataFrame({
