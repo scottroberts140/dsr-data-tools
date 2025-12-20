@@ -213,7 +213,11 @@ def generate_recommendations(
     df: pd.DataFrame,
     target_column: str | None = None,
     max_decimal_places: int | dict[str, int] | None = None,
-    default_max_decimal_places: int | None = None
+    default_max_decimal_places: int | None = None,
+    min_binning_unique_values: int | dict[str, int] | None = None,
+    default_min_binning_unique_values: int = 10,
+    max_binning_unique_values: int | dict[str, int] | None = None,
+    default_max_binning_unique_values: int = 1000
 ) -> dict[str, dict[str, Recommendation]]:
     """Generate data preparation recommendations for each column in a DataFrame.
 
@@ -230,6 +234,19 @@ def generate_recommendations(
             decimal precision optimization.
         default_max_decimal_places (int | None): Default max decimal places to use for columns
             not in the max_decimal_places dict. Only used if max_decimal_places is a dict.
+        min_binning_unique_values (int | dict | None): Minimum unique values for binning consideration.
+            Can be an int (applies to all numeric columns) or dict mapping column names to their
+            specific minimum values. If None, default_min_binning_unique_values is used for all columns.
+        default_min_binning_unique_values (int): Default minimum unique values for columns not in
+            the min_binning_unique_values dict. Only used if min_binning_unique_values is a dict.
+            Default is 10.
+        max_binning_unique_values (int | dict | None): Maximum unique values for binning consideration.
+            Can be an int (applies to all numeric columns) or dict mapping column names to their
+            specific maximum values. If None, default_max_binning_unique_values is used for all columns.
+        default_max_binning_unique_values (int): Default maximum unique values for columns not in
+            the max_binning_unique_values dict. Only used if max_binning_unique_values is a dict.
+            Default is 1000. Adjust higher for large datasets where 1000 unique values might still
+            represent continuous data (e.g., millions of rows).
 
     Returns:
         dict[str, dict[str, Recommendation]]: Nested dictionary mapping column names
@@ -459,8 +476,29 @@ def generate_recommendations(
 
         # 7. Suggest binning for continuous numeric columns with moderate cardinality
         # Candidates for binning: numeric columns with more unique values than expected categories
-        # but not so many that binning loses information (between ~10 and ~1000 unique values)
-        if is_numeric and 10 <= unique_count <= 1000:
+        # but not so many that binning loses information
+
+        # Determine the min_binning_unique_values value for this column
+        col_min_binning: int
+        if min_binning_unique_values is None:
+            col_min_binning = default_min_binning_unique_values
+        elif isinstance(min_binning_unique_values, dict):
+            col_min_binning = min_binning_unique_values.get(
+                col_name, default_min_binning_unique_values)
+        else:
+            col_min_binning = min_binning_unique_values
+
+        # Determine the max_binning_unique_values value for this column
+        col_max_binning: int
+        if max_binning_unique_values is None:
+            col_max_binning = default_max_binning_unique_values
+        elif isinstance(max_binning_unique_values, dict):
+            col_max_binning = max_binning_unique_values.get(
+                col_name, default_max_binning_unique_values)
+        else:
+            col_max_binning = max_binning_unique_values
+
+        if is_numeric and col_min_binning <= unique_count <= col_max_binning:
             non_null_series = series.dropna()
 
             # Check if column has reasonable variance and distribution for binning
@@ -564,7 +602,11 @@ def analyze_dataset(
     generate_recs: bool = False,
     max_decimal_places: int | dict[str, int] | None = None,
     default_max_decimal_places: int | None = None,
-    normalize_column_names: bool = False
+    normalize_column_names: bool = False,
+    min_binning_unique_values: int | dict[str, int] | None = None,
+    default_min_binning_unique_values: int = 10,
+    max_binning_unique_values: int | dict[str, int] | None = None,
+    default_max_binning_unique_values: int = 1000
 ) -> tuple[DataframeInfo, dict[str, dict[str, Recommendation]] | None]:
     """Perform comprehensive analysis of all columns in a DataFrame.
 
@@ -585,6 +627,16 @@ def analyze_dataset(
             not in the max_decimal_places dict. Only used if max_decimal_places is a dict.
         normalize_column_names (bool): Whether to convert column names to snake_case. Default is False.
             If True, column names are converted at the start (before analysis and recommendations).
+        min_binning_unique_values (int | dict | None): Minimum unique values for binning consideration.
+            Can be an int (applies to all numeric columns) or dict mapping column names to their
+            specific minimum values. If None, default_min_binning_unique_values is used for all columns.
+        default_min_binning_unique_values (int): Default minimum unique values for columns not in
+            the min_binning_unique_values dict. Default is 10.
+        max_binning_unique_values (int | dict | None): Maximum unique values for binning consideration.
+            Can be an int (applies to all numeric columns) or dict mapping column names to their
+            specific maximum values. If None, default_max_binning_unique_values is used for all columns.
+        default_max_binning_unique_values (int): Default maximum unique values for columns not in
+            the max_binning_unique_values dict. Default is 1000.
 
     Returns:
         tuple[DataframeInfo, dict | None]: A tuple containing:
@@ -617,7 +669,9 @@ def analyze_dataset(
     recommendations = None
     if generate_recs:
         recommendations = generate_recommendations(
-            df, target_column, max_decimal_places, default_max_decimal_places)
+            df, target_column, max_decimal_places, default_max_decimal_places,
+            min_binning_unique_values, default_min_binning_unique_values,
+            max_binning_unique_values, default_max_binning_unique_values)
 
     for c in range(n):
         col = df_info.columns[c]
