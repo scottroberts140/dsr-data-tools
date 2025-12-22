@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from dsr_data_tools import analysis
 from dsr_data_tools.analysis import generate_recommendations, analyze_dataset, generate_interaction_recommendations
+from dsr_data_tools.recommendations import apply_recommendations
 from dsr_data_tools.enums import RecommendationType
 
 
@@ -50,6 +51,23 @@ class TestAnalysisModule:
         assert 'date_str' in recs
         assert 'datetime_conversion' in recs['date_str']
         assert recs['date_str']['datetime_conversion'].type == RecommendationType.DATETIME_CONVERSION
+
+    def test_apply_datetime_conversion_recommendation(self):
+        """Applying datetime conversion recommendation converts object column to datetime dtype with NaT for invalids."""
+        valid_dates = ["2025-01-01", "2025-01-02", "2025-01-03"] * 7
+        data = valid_dates[:-1] + ["invalid"]
+        df = pd.DataFrame({'date_str': data})
+
+        recs = generate_recommendations(df)
+        assert 'date_str' in recs and 'datetime_conversion' in recs['date_str']
+
+        # Apply only the datetime conversion to avoid changing other columns
+        applied = apply_recommendations(df, {'date_str': recs['date_str']['datetime_conversion']})
+
+        # Column should be datetime64 dtype
+        assert pd.api.types.is_datetime64_any_dtype(applied['date_str'])
+        # The last entry was 'invalid' and should be NaT
+        assert pd.isna(applied['date_str'].iloc[-1])
 
     def test_binning_thresholds_int(self):
         """Binning triggers with int thresholds for unique counts."""
