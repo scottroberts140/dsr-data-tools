@@ -860,9 +860,11 @@ class DatetimeConversionRecommendation(Recommendation):
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
         # Coerce invalid strings to NaT; users can handle NaT downstream
-        result[self.column_name] = pd.to_datetime(result[self.column_name], errors='coerce')
+        result[self.column_name] = pd.to_datetime(
+            result[self.column_name], errors='coerce')
         return result
 
     def info(self) -> None:
         print(f"  Recommendation: {self.type.name}")
-        print(f"    Action: Convert column '{self.column_name}' to datetime dtype (coerce invalid to NaT)")
+        print(
+            f"    Action: Convert column '{self.column_name}' to datetime dtype (coerce invalid to NaT)")

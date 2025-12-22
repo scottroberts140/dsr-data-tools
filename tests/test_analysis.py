@@ -38,6 +38,19 @@ class TestAnalysisModule:
         recs = generate_recommendations(sample_dataframe)
         assert isinstance(recs, dict)
 
+    def test_datetime_string_column_recommendation(self):
+        """Object column with date-like strings should trigger datetime conversion recommendation."""
+        # Build 20-row DataFrame to avoid non-informative high-cardinality short-circuit
+        # Build 21-row DataFrame with >95% valid datetime strings among non-nulls
+        valid_dates = ["2025-01-01", "2025-01-02", "2025-01-03"] * 7  # 21 valid
+        data = valid_dates[:-1] + ["invalid"]  # 20 valid, 1 invalid -> ~95.2% valid
+        df = pd.DataFrame({'date_str': data})
+
+        recs = generate_recommendations(df)
+        assert 'date_str' in recs
+        assert 'datetime_conversion' in recs['date_str']
+        assert recs['date_str']['datetime_conversion'].type == RecommendationType.DATETIME_CONVERSION
+
     def test_binning_thresholds_int(self):
         """Binning triggers with int thresholds for unique counts."""
         # Create a numeric column with duplicates to avoid non_informative
