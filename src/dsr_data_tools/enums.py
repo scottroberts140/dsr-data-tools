@@ -37,6 +37,9 @@ class RecommendationType(Enum):
     FEATURE_INTERACTION = "feature_interaction"
     """Recommended interaction feature combining two columns"""
 
+    DATETIME_CONVERSION = "datetime_conversion"
+    """Object/string column likely contains datetimes; convert to datetime dtype"""
+
 
 class InteractionType(Enum):
     """Types of feature interactions."""

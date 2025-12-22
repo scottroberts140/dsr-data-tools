@@ -598,6 +598,7 @@ def create_recommendation(
         RecommendationType.OUTLIER_DETECTION: OutlierDetectionRecommendation,
         RecommendationType.BOOLEAN_CLASSIFICATION: BooleanClassificationRecommendation,
         RecommendationType.BINNING: BinningRecommendation,
+        RecommendationType.DATETIME_CONVERSION: DatetimeConversionRecommendation,
     }
 
     if rec_type not in recommendation_classes:
@@ -847,3 +848,21 @@ class FeatureInteractionRecommendation(Recommendation):
         print(f"    New Feature: '{self.derived_name}' (EDITABLE)")
         print(f"    Priority Score: {self.priority_score:.2f}")
         print(f"    Rationale: {self.rationale}")
+
+
+@dataclass
+class DatetimeConversionRecommendation(Recommendation):
+    """Recommendation to convert object/string column to datetime dtype."""
+
+    def __post_init__(self):
+        self.type = RecommendationType.DATETIME_CONVERSION
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = df.copy()
+        # Coerce invalid strings to NaT; users can handle NaT downstream
+        result[self.column_name] = pd.to_datetime(result[self.column_name], errors='coerce')
+        return result
+
+    def info(self) -> None:
+        print(f"  Recommendation: {self.type.name}")
+        print(f"    Action: Convert column '{self.column_name}' to datetime dtype (coerce invalid to NaT)")

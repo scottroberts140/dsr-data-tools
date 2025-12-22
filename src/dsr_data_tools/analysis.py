@@ -13,6 +13,8 @@ from dsr_data_tools.recommendations import (
     ValueReplacementRecommendation,
     FeatureInteractionRecommendation,
 )
+from dsr_utils.datetime import is_string_datetime
+from dsr_data_tools.recommendations import DatetimeConversionRecommendation
 import pandas as pd
 from typing import Type
 from dsr_utils import strings
@@ -415,6 +417,17 @@ def generate_recommendations(
 
         # 3.7. Check for non-numeric placeholder values (object columns with some numeric values)
         if series.dtype == 'object':
+            # Detect datetime-like string columns and recommend conversion
+            try:
+                if is_string_datetime(series):
+                    rec = DatetimeConversionRecommendation(
+                        type=RecommendationType.DATETIME_CONVERSION,
+                        column_name=col_name,
+                        description=f"Column '{col_name}' appears to contain datetimes; convert to datetime dtype.")
+                    col_recommendations['datetime_conversion'] = rec
+            except Exception:
+                # If detection fails, continue with other checks
+                pass
             # Compute value_counts if not already cached
             if value_counts_cache is None:
                 value_counts_cache = series.value_counts()
