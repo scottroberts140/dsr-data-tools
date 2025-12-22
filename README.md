@@ -28,6 +28,34 @@ df = pd.read_csv('data.csv')
 analyze_dataset(df)
 ```
 
+### Datetime Conversion Recommendation
+
+`generate_recommendations()` detects object/string columns that are likely datetimes and recommends converting them to a proper datetime dtype.
+
+```python
+import pandas as pd
+from dsr_data_tools.analysis import generate_recommendations
+from dsr_data_tools.recommendations import apply_recommendations
+
+# Example column with mostly valid date strings
+df = pd.DataFrame({
+	'date_str': [
+		'2025-01-01', '2025-01-02', '2025-01-03',
+		'2025-01-04', 'invalid',  # one invalid value
+	] * 10  # scale up rows
+})
+
+recs = generate_recommendations(df)
+
+# If detected, apply the datetime conversion recommendation
+if 'date_str' in recs and 'datetime_conversion' in recs['date_str']:
+	df_converted = apply_recommendations(df, {
+		'date_str': recs['date_str']['datetime_conversion']
+	})
+	# Column is now datetime64; invalid entries coerced to NaT
+	print(df_converted['date_str'].dtype)  # datetime64[ns]
+```
+
 ## Performance
 
 This library is optimized for large-scale data processing using vectorized operations.

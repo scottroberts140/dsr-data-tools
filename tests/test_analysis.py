@@ -43,8 +43,10 @@ class TestAnalysisModule:
         """Object column with date-like strings should trigger datetime conversion recommendation."""
         # Build 20-row DataFrame to avoid non-informative high-cardinality short-circuit
         # Build 21-row DataFrame with >95% valid datetime strings among non-nulls
-        valid_dates = ["2025-01-01", "2025-01-02", "2025-01-03"] * 7  # 21 valid
-        data = valid_dates[:-1] + ["invalid"]  # 20 valid, 1 invalid -> ~95.2% valid
+        valid_dates = ["2025-01-01", "2025-01-02",
+                       "2025-01-03"] * 7  # 21 valid
+        # 20 valid, 1 invalid -> ~95.2% valid
+        data = valid_dates[:-1] + ["invalid"]
         df = pd.DataFrame({'date_str': data})
 
         recs = generate_recommendations(df)
@@ -62,7 +64,8 @@ class TestAnalysisModule:
         assert 'date_str' in recs and 'datetime_conversion' in recs['date_str']
 
         # Apply only the datetime conversion to avoid changing other columns
-        applied = apply_recommendations(df, {'date_str': recs['date_str']['datetime_conversion']})
+        applied = apply_recommendations(
+            df, {'date_str': recs['date_str']['datetime_conversion']})
 
         # Column should be datetime64 dtype
         assert pd.api.types.is_datetime64_any_dtype(applied['date_str'])
