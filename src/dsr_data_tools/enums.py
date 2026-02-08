@@ -19,14 +19,20 @@ class RecommendationType(Enum):
     OUTLIER_DETECTION = "outlier_detection"
     """Numeric column has outliers; recommend scaling or RobustScaler"""
 
+    OUTLIER_HANDLING = "outlier_handling"
+    """Numeric column has outliers; clean by nullifying or clipping values beyond bounds"""
+
     BOOLEAN_CLASSIFICATION = "boolean_classification"
     """Numeric column with exactly two unique values (0, 1); treat as boolean"""
 
     BINNING = "binning"
     """Numeric column should be binned into categorical ranges"""
 
-    INT64_CONVERSION = "int64_conversion"
-    """Float column with only integer values should be converted to int64"""
+    INT_CONVERSION = "int_conversion"
+    """Convert a column to int"""
+
+    FLOAT_CONVERSION = "float_conversion"
+    """Convert a column to float"""
 
     DECIMAL_PRECISION_OPTIMIZATION = "decimal_precision_optimization"
     """Float column can have decimal precision reduced or be converted to int64"""
@@ -39,6 +45,15 @@ class RecommendationType(Enum):
 
     DATETIME_CONVERSION = "datetime_conversion"
     """Object/string column likely contains datetimes; convert to datetime dtype"""
+
+    FEATURE_EXTRACTION = "feature_extraction"
+    """Extract derived features from a column (e.g., datetime components)"""
+
+    CATEGORICAL_CONVERSION = "categorical_conversion"
+    """Convert object column to pandas categorical dtype for memory optimization"""
+
+    FEATURE_AGGREGATION = "feature_aggregation"
+    """Aggregate multiple columns into a new feature (e.g., sum, mean)."""
 
 
 class InteractionType(Enum):
@@ -75,8 +90,14 @@ class MissingValueStrategy(Enum):
     DROP_ROWS = "drop_rows"
     """Remove rows with missing values"""
 
-    IMPUTE = "impute"
-    """Impute missing values (mean, median, mode, etc.)"""
+    IMPUTE_MEAN = "impute_mean"
+    """Impute missing values with column mean"""
+
+    IMPUTE_MEDIAN = "impute_median"
+    """Impute missing values with column median"""
+
+    IMPUTE_MODE = "impute_mode"
+    """Impute missing values with column mode"""
 
     DROP_COLUMN = "drop_column"
     """Remove the column entirely"""
@@ -101,6 +122,16 @@ class OutlierStrategy(Enum):
     """Remove rows with outliers"""
 
 
+class OutlierHandlingStrategy(Enum):
+    """Strategies for cleaning outliers by nullifying or clipping."""
+
+    NULLIFY = "nullify"
+    """Set outliers beyond bounds to NaN"""
+
+    CLIP = "clip"
+    """Cap outliers at the lower and upper bounds"""
+
+
 class ImbalanceStrategy(Enum):
     """Strategies for handling class imbalance."""
 
@@ -115,3 +146,56 @@ class ImbalanceStrategy(Enum):
 
     DOWNSAMPLING = "downsampling"
     """Under-sample the majority class"""
+
+
+class ColumnHintType(Enum):
+    """Logical types for ColumnHint to guide recommendation generation."""
+
+    DATETIME = "datetime"
+    """Datetime column; extract temporal features or convert from string"""
+
+    FINANCIAL = "financial"
+    """Financial/monetary value; apply floor/ceiling bounds"""
+
+    CATEGORICAL = "categorical"
+    """Convert to categorical dtype for memory optimization"""
+
+    NUMERIC = "numeric"
+    """Numeric column; apply floor/ceiling bounds if specified"""
+
+    AGGREGATE = "aggregate"
+    """Aggregate multiple columns into a new feature"""
+    GEOSPATIAL = "geospatial"
+    """Latitude/longitude columns; apply bounding box constraints"""
+
+    DISTANCE = "distance"
+    """Distance-based column; specify unit and optional bounds"""
+
+
+class RoundingMode(Enum):
+    """Rounding modes for decimal precision operations."""
+
+    NEAREST = "nearest"
+    """Standard 'Round Half Up' (biased) - 1.5→2.0, 2.5→3.0"""
+
+    BANKERS = "bankers"
+    """Round to nearest even (unbiased) - 1.5→2.0, 2.5→2.0"""
+
+    UP = "up"
+    """Ceiling - always away from zero - 1.5→2.0, 2.5→3.0"""
+
+    DOWN = "down"
+    """Floor - always toward zero - 1.5→1.0, 2.5→2.0"""
+
+
+class BitDepth(Enum):
+    """Supported bit depths for numeric conversions."""
+
+    INT32 = "int32"
+    INT64 = "int64"
+    FLOAT32 = "float32"
+    FLOAT64 = "float64"
+
+    @property
+    def is_float(self) -> bool:
+        return self in (BitDepth.FLOAT32, BitDepth.FLOAT64)
