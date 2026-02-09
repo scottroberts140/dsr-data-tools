@@ -1,8 +1,8 @@
 # dsr-data-tools
 
-[![PyPI version](https://img.shields.io/pypi/v/dsr-data-tools.svg)](https://pypi.org/project/dsr-data-tools/)
-[![Python versions](https://img.shields.io/pypi/pyversions/dsr-data-tools.svg)](https://pypi.org/project/dsr-data-tools/)
-[![License](https://img.shields.io/pypi/l/dsr-data-tools.svg)](https://pypi.org/project/dsr-data-tools/)
+[![PyPI version](https://img.shields.io/pypi/v/dsr-data-tools.svg?cacheSeconds=300)](https://pypi.org/project/dsr-data-tools/)
+[![Python versions](https://img.shields.io/pypi/pyversions/dsr-data-tools.svg?cacheSeconds=300)](https://pypi.org/project/dsr-data-tools/)
+[![License](https://img.shields.io/pypi/l/dsr-data-tools.svg?cacheSeconds=300)](https://pypi.org/project/dsr-data-tools/)
 [![Changelog](https://img.shields.io/badge/changelog-available-blue.svg)](https://github.com/scottroberts140/dsr-data-tools/releases)
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
