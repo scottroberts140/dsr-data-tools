@@ -1,3 +1,5 @@
+"""Dataset analysis helpers and interaction recommendation utilities."""
+
 from __future__ import annotations
 from typing import cast
 from dsr_data_tools.recommendations import (
@@ -33,6 +35,7 @@ class DataframeColumn:
         >>> col.non_null_count
         3
     """
+
     @staticmethod
     def dfc_list_from_df(df: pd.DataFrame) -> list[DataframeColumn]:
         """Create a list of DataframeColumn objects from a DataFrame.
@@ -59,34 +62,27 @@ class DataframeColumn:
         dfc_list = []
 
         for c in range(n):
-            dfc = DataframeColumn(df_columns[c],
-                                  df_non_null_count[c],
-                                  df_data_types[c])
+            dfc = DataframeColumn(df_columns[c], df_non_null_count[c], df_data_types[c])
             dfc_list.append(dfc)
 
         return dfc_list
 
-    def __init__(
-            self,
-            name: str,
-            non_null_count: int,
-            data_type: Type
-    ):
-        self.__name = name
-        self.__non_null_count = non_null_count
-        self.__data_type = data_type
+    def __init__(self, name: str, non_null_count: int, data_type: Type):
+        self._name = name
+        self._non_null_count = non_null_count
+        self._data_type = data_type
 
     @property
     def name(self) -> str:
-        return self.__name
+        return self._name
 
     @property
     def non_null_count(self) -> int:
-        return self.__non_null_count
+        return self._non_null_count
 
     @property
     def data_type(self) -> Type:
-        return self.__data_type
+        return self._data_type
 
 
 class DataframeInfo:
@@ -115,25 +111,22 @@ class DataframeInfo:
         2
     """
 
-    def __init__(
-            self,
-            df: pd.DataFrame
-    ):
-        self.__row_count = len(df)
-        self.__duplicate_row_count = df.duplicated().sum()
-        self.__columns = DataframeColumn.dfc_list_from_df(df)
+    def __init__(self, df: pd.DataFrame):
+        self._row_count = len(df)
+        self._duplicate_row_count = df.duplicated().sum()
+        self._columns = DataframeColumn.dfc_list_from_df(df)
 
     @property
     def row_count(self) -> int:
-        return self.__row_count
+        return self._row_count
 
     @property
     def duplicate_row_count(self) -> int:
-        return self.__duplicate_row_count
+        return self._duplicate_row_count
 
     @property
     def columns(self) -> list[DataframeColumn]:
-        return self.__columns
+        return self._columns
 
     def info(self):
         """Display formatted summary of DataFrame information.
@@ -152,23 +145,22 @@ class DataframeInfo:
             name                 2   object
             age                  2   int64
         """
-        print(f'Rows: {self.row_count}')
-        print(f'Duplicate rows: {self.duplicate_row_count}')
+        print(f"Rows: {self.row_count}")
+        print(f"Duplicate rows: {self.duplicate_row_count}")
         print()
-        col_headers = ['Column', 'Non-null', 'Data type']
+        col_headers = ["Column", "Non-null", "Data type"]
         col_width = [15, 10, 12]
         print(
-            f'{col_headers[0]:<{col_width[0]}}{col_headers[1]:>{col_width[1]}}   {col_headers[2]:<{col_width[2]}}')
+            f"{col_headers[0]:<{col_width[0]}}{col_headers[1]:>{col_width[1]}}   {col_headers[2]:<{col_width[2]}}"
+        )
 
         for c in self.columns:
             print(
-                f'{c.name:<{col_width[0]}}{c.non_null_count:>{col_width[1]}}   {c.data_type.name:<{col_width[2]}}')
+                f"{c.name:<{col_width[0]}}{c.non_null_count:>{col_width[1]}}   {c.data_type.name:<{col_width[2]}}"
+            )
 
 
-def analyze_column_data(
-    series: pd.Series,
-    dataframe_column: DataframeColumn
-):
+def analyze_column_data(series: pd.Series, dataframe_column: DataframeColumn):
     """Analyze and print detailed statistics for a single DataFrame column.
 
     Displays column name, data type, null counts, unique values, min/max values.
@@ -186,8 +178,8 @@ def analyze_column_data(
         # Prints detailed statistics
     """
     series_length = len(series)
-    is_float_type = (dataframe_column.data_type.name == 'float64')
-    integer_analysis = ''
+    is_float_type = dataframe_column.data_type.name == "float64"
+    integer_analysis = ""
 
     if is_float_type:
         # Vectorized count of integer-like float values
@@ -196,21 +188,23 @@ def analyze_column_data(
         integer_analysis = f"""Integer values:     {integer_value_count}
 Non-integer values: {non_integer_value_count}"""
 
-    is_object_data_type = (dataframe_column.data_type.name == 'object')
-    object_analysis = ''
+    is_object_data_type = dataframe_column.data_type.name == "object"
+    object_analysis = ""
 
     if is_object_data_type:
         numeric_value_count = series.str.isnumeric().sum()
-        non_numeric_value_count = series_length - \
-            series.apply(strings.is_float_string).sum()
+        non_numeric_value_count = (
+            series_length - series.apply(strings.is_float_string).sum()
+        )
 
         object_analysis = f"""Numeric values:     {numeric_value_count}
 Non-numeric values: {non_numeric_value_count}"""
 
     # Build analysis string, only including min/max for numeric types
     min_max_str = ""
-    is_numeric_type = is_float_type or (dataframe_column.data_type.name in [
-                                        'int64', 'int32', 'int16', 'int8'])
+    is_numeric_type = is_float_type or (
+        dataframe_column.data_type.name in ["int64", "int32", "int16", "int8"]
+    )
     if is_numeric_type:
         min_max_str = f"""Min value:          {series.min()}
 Max value:          {series.max()}"""
@@ -244,7 +238,7 @@ def analyze_dataset(
     min_binning_unique_values: int | dict[str, int] | None = None,
     default_min_binning_unique_values: int = 10,
     max_binning_unique_values: int | dict[str, int] | None = None,
-    default_max_binning_unique_values: int = 1000
+    default_max_binning_unique_values: int = 1000,
 ) -> tuple[DataframeInfo, RecommendationManager | None]:
     """Perform comprehensive analysis of all columns in a DataFrame.
 
@@ -342,7 +336,7 @@ def generate_interaction_recommendations(
     target_column: str | None = None,
     top_n: int | None = 20,
     exclude_columns: list[str] | None = None,
-    random_state: int | None = 42
+    random_state: int | None = 42,
 ) -> list[FeatureInteractionRecommendation]:
     """Generate recommended feature interactions using statistical guidance.
 
@@ -413,8 +407,9 @@ def generate_interaction_recommendations(
     # Exclude ID-like columns and specified columns
     id_keywords = ["id", "row", "index", "number", "code"]
     exclude_cols = set(exclude_columns)
-    exclude_cols.update(col for col in numeric_cols if any(
-        kw in col.lower() for kw in id_keywords))
+    exclude_cols.update(
+        col for col in numeric_cols if any(kw in col.lower() for kw in id_keywords)
+    )
 
     usable_cols = [col for col in numeric_cols if col not in exclude_cols]
 
@@ -439,13 +434,15 @@ def generate_interaction_recommendations(
 
         # Determine if target is classification or regression
         is_classification = df[target_column].nunique() < 10
-        mi_scores = mutual_info_classif(X, y, random_state=random_state) if is_classification else mutual_info_regression(
-            X, y, random_state=random_state)
+        mi_scores = (
+            mutual_info_classif(X, y, random_state=random_state)
+            if is_classification
+            else mutual_info_regression(X, y, random_state=random_state)
+        )
 
         # Keep columns with a MI score above a threshold (e.g., top 50th percentile)
         mi_series = pd.Series(mi_scores, index=binary_cols)
-        strong_binary_cols = mi_series[mi_series >
-                                       mi_series.median()].index.tolist()
+        strong_binary_cols = mi_series[mi_series > mi_series.median()].index.tolist()
     else:
         # Fallback to current behavior if no target is provided
         strong_binary_cols = binary_cols
@@ -456,15 +453,18 @@ def generate_interaction_recommendations(
         if df[col].nunique() > 10 and col not in binary_cols:
             col_var = df[col].var()
             quantile_var = df[usable_cols].var().quantile(0.6)
-            if isinstance(col_var, (int, float)) and isinstance(quantile_var, (int, float)):
+            if isinstance(col_var, (int, float)) and isinstance(
+                quantile_var, (int, float)
+            ):
                 if col_var > quantile_var:
                     high_variance_cols.append(col)
 
     for binary_col in strong_binary_cols:
         for cont_col in high_variance_cols:
             if binary_col != cont_col:
-                priority_score = float(
-                    mi_series[binary_col]) if mi_series is not None else 0.0
+                priority_score = (
+                    float(mi_series[binary_col]) if mi_series is not None else 0.0
+                )
 
                 interactions.append(
                     FeatureInteractionRecommendation(
@@ -475,7 +475,7 @@ def generate_interaction_recommendations(
                         description=f"Status-Impact interaction: {cont_col} × {binary_col}",
                         rationale=f"Multiply high-variance '{cont_col}' by binary status '{binary_col}' "
                         f"to distinguish behavior based on membership status",
-                        priority_score=priority_score
+                        priority_score=priority_score,
                     )
                 )
 
@@ -487,7 +487,7 @@ def generate_interaction_recommendations(
         corr_matrix: pd.DataFrame = df[continuous_cols].corr().abs()
 
         for i, col1 in enumerate(continuous_cols):
-            for col2 in continuous_cols[i + 1:]:
+            for col2 in continuous_cols[i + 1 :]:
                 corr: float = cast(float, corr_matrix.loc[col1, col2])
                 # If columns are highly correlated (> 0.7), they are good ratio candidates
                 if corr > 0.7:
@@ -504,7 +504,7 @@ def generate_interaction_recommendations(
                                 description=f"Resource Density ratio: {col1} / {col2}",
                                 rationale=f"High correlation ({corr:.2f}) detected between "
                                 f"'{col1}' and '{col2}', suggesting a meaningful ratio relationship.",
-                                priority_score=corr
+                                priority_score=corr,
                             )
                         )
 
@@ -523,22 +523,24 @@ def generate_interaction_recommendations(
 
                     # Alignment and Cleaning
                     # MI cannot handle NANs or Infinite values
-                    valid_idx = temp_rate.replace(
-                        [np.inf, -np.inf], np.nan).dropna().index
+                    valid_idx = (
+                        temp_rate.replace([np.inf, -np.inf], np.nan).dropna().index
+                    )
                     intersect_idx = valid_idx.intersection(y.index)
 
                     if len(intersect_idx) > 0:
-                        X_temp = temp_rate.loc[intersect_idx].to_numpy().reshape(
-                            -1, 1)
+                        X_temp = temp_rate.loc[intersect_idx].to_numpy().reshape(-1, 1)
                         y_temp = y.loc[intersect_idx]
 
                         # Calculate MI for this specific interaction
                         if is_classification:
                             mi_val = mutual_info_classif(
-                                X_temp, y_temp, random_state=random_state)
+                                X_temp, y_temp, random_state=random_state
+                            )
                         else:
                             mi_val = mutual_info_regression(
-                                X_temp, y_temp, random_state=random_state)
+                                X_temp, y_temp, random_state=random_state
+                            )
 
                         priority_score = float(mi_val[0])
 
@@ -551,7 +553,7 @@ def generate_interaction_recommendations(
                         description=f"Product Utilization rate: {count_col} / {dur_col}",
                         rationale=f"Combining discrete count '{count_col}' with continuous duration "
                         f"'{dur_col}' to measure utilization intensity over time.",
-                        priority_score=priority_score
+                        priority_score=priority_score,
                     )
                 )
 

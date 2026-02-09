@@ -81,7 +81,7 @@ class TestAnalysisModule:
         """Binning triggers with int thresholds for unique counts."""
         # Create a numeric column with duplicates to avoid non_informative
         # 25 unique values repeated twice -> 50 rows
-        num_vals = np.arange(25, dtype=float).repeat(2)
+        num_vals = (np.arange(25, dtype=float) + 0.1).repeat(2)
         df = pd.DataFrame(
             {"num_col": num_vals, "target": np.random.randint(0, 2, size=num_vals.size)}
         )
@@ -105,9 +105,11 @@ class TestAnalysisModule:
         """Binning uses per-column dict thresholds when provided."""
         # Create columns with consistent lengths and controlled unique counts
         # 'x': 100 unique values spread across 110 rows (avoid non_informative)
-        x = np.concatenate([np.arange(100, dtype=float), np.arange(10, dtype=float)])
+        x = np.concatenate(
+            [np.arange(100, dtype=float) + 0.1, np.arange(10, dtype=float) + 0.1]
+        )
         # 'y': 20 unique values spread across 110 rows
-        y = np.tile(np.arange(20, dtype=float), 6)[:110]
+        y = np.tile(np.arange(20, dtype=float) + 0.2, 6)[:110]
         df = pd.DataFrame({"x": x, "y": y})
         manager = RecommendationManager()
         manager.generate_recommendations(

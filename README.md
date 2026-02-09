@@ -1,6 +1,13 @@
 # dsr-data-tools
 
+[![PyPI version](https://img.shields.io/pypi/v/dsr-data-tools.svg)](https://pypi.org/project/dsr-data-tools/)
+[![Python versions](https://img.shields.io/pypi/pyversions/dsr-data-tools.svg)](https://pypi.org/project/dsr-data-tools/)
+[![License](https://img.shields.io/pypi/l/dsr-data-tools.svg)](https://pypi.org/project/dsr-data-tools/)
+[![Changelog](https://img.shields.io/badge/changelog-available-blue.svg)](https://github.com/scottroberts140/dsr-data-tools/releases)
+
 Data analysis and exploration tools for exploratory data analysis (EDA).
+
+**Version 1.0.0**: This release is breaking and not backward-compatible with prior 0.x versions.
 
 ## Features
 
@@ -90,7 +97,7 @@ make benchmark N=5000000      # custom size
 - pandas
 - numpy
 - scikit-learn
-- dsr-utils
+- dsr-utils >= 1.0.0
 
 ## License
 

@@ -1,3 +1,5 @@
+"""Recommendation models and orchestration for dataset preparation."""
+
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, cast, TYPE_CHECKING, Union, Iterable

@@ -1,3 +1,5 @@
+"""Enumerations for recommendation and preprocessing strategies."""
+
 from enum import Enum
 
 
