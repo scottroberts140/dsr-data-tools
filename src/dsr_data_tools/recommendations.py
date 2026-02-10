@@ -3847,3 +3847,57 @@ class RecommendationManager:
             if rec.alias == alias:
                 return rec
         return None
+
+    def enable_by_id(self, rec_id: str, ok_if_none: bool = False) -> None:
+        """
+        Enable a recommendation by its ID.
+
+        Args:
+            rec_id: The ID of the recommendation to enable
+            ok_if_none: If False, raise when the ID is not found
+
+        Raises:
+            ValueError: If the recommendation is not found and ok_if_none is False
+        """
+        rec = self.get_by_id(rec_id)
+        if rec is not None:
+            rec.enabled = True
+        else:
+            if not ok_if_none:
+                raise ValueError(f"Rec ID not found: {rec_id}")
+
+    def disable_by_id(self, rec_id: str, ok_if_none: bool = False) -> None:
+        """
+        Disable a recommendation by its ID.
+
+        Args:
+            rec_id: The ID of the recommendation to disable
+            ok_if_none: If False, raise when the ID is not found
+
+        Raises:
+            ValueError: If the recommendation is not found and ok_if_none is False
+        """
+        rec = self.get_by_id(rec_id)
+        if rec is not None:
+            rec.enabled = False
+        else:
+            if not ok_if_none:
+                raise ValueError(f"Rec ID not found: {rec_id}")
+
+    def toggle_enabled_by_id(self, rec_id: str, ok_if_none: bool = False) -> None:
+        """
+        Toggle enabled state for a recommendation by its ID.
+
+        Args:
+            rec_id: The ID of the recommendation to toggle
+            ok_if_none: If False, raise when the ID is not found
+
+        Raises:
+            ValueError: If the recommendation is not found and ok_if_none is False
+        """
+        rec = self.get_by_id(rec_id)
+        if rec is not None:
+            rec.enabled = not rec.enabled
+        else:
+            if not ok_if_none:
+                raise ValueError(f"Rec ID not found: {rec_id}")
