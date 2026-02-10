@@ -2115,6 +2115,8 @@ class RecommendationManager:
                 higher-priority recommendations and that dtypes are compatible.
             inplace: If True, mutate the provided DataFrame directly when possible.
                 Default False keeps previous behavior (works on a copy).
+            drop_duplicates: If True, drop duplicate rows before applying recommendations.
+                Default False leaves the data unchanged.
 
         Returns:
             DataFrame with all recommendations applied and cleaned up
