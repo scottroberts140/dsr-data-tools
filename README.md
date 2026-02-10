@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 1.0.0**: This release is breaking and not backward-compatible with prior 0.x versions.
+**Version 1.1.0**: This release adds new functionality and bug fixes while remaining compatible with 1.0.0.
 
 ## Features
 

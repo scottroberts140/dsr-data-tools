@@ -2292,7 +2292,7 @@ class RecommendationManager:
         # First, check that all columns referenced in enabled recommendations exist in the DataFrame
         available_columns = set(df.columns)
         for rec in self._pipeline:
-            # Only validate enabled recommendations
+            # Validate only enabled recommendations
             if not rec.enabled:
                 continue
 
@@ -2310,7 +2310,7 @@ class RecommendationManager:
 
         # First pass: identify all read columns and check for overwrite conflicts
         for rec in self._pipeline:
-            # Only process enabled recommendations
+            # Process only enabled recommendations
             if not rec.enabled:
                 continue
 
@@ -2431,7 +2431,7 @@ class RecommendationManager:
                 # Some strategies drop the column
                 if isinstance(
                     rec, MissingValuesRecommendation
-                ) and rec.strategy.name in ("DROP_COLUMN", "DROP_ROWS"):
+                ) and rec.strategy.name in ("DROP_COLUMN",):
                     dropped_columns.add(rec.column_name)
 
             # Check if any later recommendation uses a dropped column
