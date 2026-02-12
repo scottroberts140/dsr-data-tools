@@ -219,7 +219,7 @@ Created `test_column_overwrite.py` with 5 comprehensive tests:
 
 ## Files Modified
 
-- `/Users/scottroberts/Documents/Developer/Projects/Python Libraries/dsr-data-tools/src/dsr_data_tools/recommendations.py`
+- `/Users/scottroberts/Library/CloudStorage/GoogleDrive-scottrdeveloper@gmail.com/My Drive/Projects/Python Libraries/dsr-data-tools/src/dsr_data_tools/recommendations.py`
   - Modified `apply()` method signature (line 1046)
   - Enhanced `_validate_pipeline()` method (line 1160)
   - Added read/write tracking logic

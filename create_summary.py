@@ -132,6 +132,6 @@ Impact:
 - Easier to understand complex pipelines with many recommendations
 - Consistent formatting makes scanning recommendations easier
 """
-with open('/Users/scottroberts/Documents/Developer/Projects/Python Libraries/dsr-data-tools/INFO_METHOD_UPDATE_SUMMARY.md', 'w') as f:
+with open('/Users/scottroberts/Library/CloudStorage/GoogleDrive-scottrdeveloper@gmail.com/My Drive/Projects/Python Libraries/dsr-data-tools/INFO_METHOD_UPDATE_SUMMARY.md', 'w') as f:
     f.write(__doc__ or "")
 print("✅ Summary document created")

@@ -28,7 +28,7 @@ import sys
 
 sys.path.insert(
     0,
-    "/Users/scottroberts/Documents/Developer/Projects/Python Libraries/dsr-data-tools/src",
+    "/Users/scottroberts/Library/CloudStorage/GoogleDrive-scottrdeveloper@gmail.com/My Drive/Projects/Python Libraries/dsr-data-tools/src",
 )
 
 
