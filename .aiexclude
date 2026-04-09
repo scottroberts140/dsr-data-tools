@@ -1,0 +1,10 @@
+# .aiexclude and .geminiignore
+../.venv/
+node_modules/
+.git/
+__pycache__/
+*.pyc
+dist/
+build/
+*.egg-info/
+.DS_Store

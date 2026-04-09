@@ -4,194 +4,263 @@ from enum import Enum
 
 
 class RecommendationType(Enum):
-    """Enumeration of recommendation types for dataset preparation."""
+    """
+    Enumeration of recommendation types for dataset preparation.
+
+    Attributes
+    ----------
+    NON_INFORMATIVE : str
+        Column with no predictive value (e.g., unique count equals row count).
+    MISSING_VALUES : str
+        Column has null/missing values; recommend removal or imputation.
+    ENCODING : str
+        Categorical column requires encoding (OneHot, Label, etc.).
+    CLASS_IMBALANCE : str
+        Target variable shows class imbalance; recommend resampling or weighting.
+    OUTLIER_DETECTION : str
+        Numeric column has outliers; recommend scaling or robust methods.
+    OUTLIER_HANDLING : str
+        Clean outliers by nullifying or clipping values beyond bounds.
+    BOOLEAN_CLASSIFICATION : str
+        Numeric column with exactly two unique values (0, 1); treat as boolean.
+    BINNING : str
+        Numeric column should be binned into categorical ranges.
+    INT_CONVERSION : str
+        Convert a column to integer dtype.
+    FLOAT_CONVERSION : str
+        Convert a column to float dtype.
+    DECIMAL_PRECISION_OPTIMIZATION : str
+        Reduce float precision or convert to int64 for efficiency.
+    VALUE_REPLACEMENT : str
+        Replace non-numeric placeholder values (e.g., '?', 'NA').
+    FEATURE_INTERACTION : str
+        Recommended interaction feature combining two columns.
+    DATETIME_CONVERSION : str
+        Convert object/string column to datetime dtype.
+    FEATURE_EXTRACTION : str
+        Extract derived features (e.g., hour, month) from a column.
+    CATEGORICAL_CONVERSION : str
+        Convert to pandas categorical dtype for memory optimization.
+    FEATURE_AGGREGATION : str
+        Aggregate multiple columns into a new feature (sum, mean, etc.).
+    """
 
     NON_INFORMATIVE = "non_informative"
-    """Column with no predictive value (unique count equals row count, high cardinality, etc.)"""
-
     MISSING_VALUES = "missing_values"
-    """Column has null/missing values; recommend removal or imputation strategy"""
-
     ENCODING = "encoding"
-    """Categorical column requires encoding (OneHotEncoder, LabelEncoder)"""
-
     CLASS_IMBALANCE = "class_imbalance"
-    """Target variable shows class imbalance; recommend SMOTE or class weighting"""
-
     OUTLIER_DETECTION = "outlier_detection"
-    """Numeric column has outliers; recommend scaling or RobustScaler"""
-
     OUTLIER_HANDLING = "outlier_handling"
-    """Numeric column has outliers; clean by nullifying or clipping values beyond bounds"""
-
     BOOLEAN_CLASSIFICATION = "boolean_classification"
-    """Numeric column with exactly two unique values (0, 1); treat as boolean"""
-
     BINNING = "binning"
-    """Numeric column should be binned into categorical ranges"""
-
     INT_CONVERSION = "int_conversion"
-    """Convert a column to int"""
-
     FLOAT_CONVERSION = "float_conversion"
-    """Convert a column to float"""
-
     DECIMAL_PRECISION_OPTIMIZATION = "decimal_precision_optimization"
-    """Float column can have decimal precision reduced or be converted to int64"""
-
     VALUE_REPLACEMENT = "value_replacement"
-    """Column contains non-numeric placeholder values that should be replaced"""
-
     FEATURE_INTERACTION = "feature_interaction"
-    """Recommended interaction feature combining two columns"""
-
     DATETIME_CONVERSION = "datetime_conversion"
-    """Object/string column likely contains datetimes; convert to datetime dtype"""
-
     FEATURE_EXTRACTION = "feature_extraction"
-    """Extract derived features from a column (e.g., datetime components)"""
-
     CATEGORICAL_CONVERSION = "categorical_conversion"
-    """Convert object column to pandas categorical dtype for memory optimization"""
-
     FEATURE_AGGREGATION = "feature_aggregation"
-    """Aggregate multiple columns into a new feature (e.g., sum, mean)."""
 
 
 class InteractionType(Enum):
-    """Types of feature interactions."""
+    """
+    Types of feature interactions.
+
+    Attributes
+    ----------
+    STATUS_IMPACT : str
+        Binary × Continuous: Status column paired with continuous column.
+    RESOURCE_DENSITY : str
+        Continuous / Continuous: Resource ratio (e.g., Balance / Salary).
+    PRODUCT_UTILIZATION : str
+        Discrete / Continuous: Utilization rate (e.g., Products / Tenure).
+    """
 
     STATUS_IMPACT = "status_impact"
-    """Binary × Continuous: Status column paired with high-variance continuous column"""
-
     RESOURCE_DENSITY = "resource_density"
-    """Continuous / Continuous: Resource ratio (e.g., Balance / Salary)"""
-
     PRODUCT_UTILIZATION = "product_utilization"
-    """Discrete / Continuous: Utilization rate (e.g., Products / Tenure)"""
 
 
 class EncodingStrategy(Enum):
-    """Strategies for encoding categorical columns."""
+    """
+    Strategies for encoding categorical columns.
+
+    Attributes
+    ----------
+    ONEHOT : str
+        One-hot encoding for multi-class categorical variables.
+    LABEL : str
+        Label encoding for ordinal or binary variables.
+    ORDINAL : str
+        Ordinal encoding for ordered categorical variables.
+    CATEGORICAL : str
+        Convert to pandas categorical dtype for memory optimization.
+    """
 
     ONEHOT = "onehot"
-    """One-hot encoding for multi-class categorical variables"""
-
     LABEL = "label"
-    """Label encoding for ordinal or binary categorical variables"""
-
     ORDINAL = "ordinal"
-    """Ordinal encoding for ordered categorical variables"""
     CATEGORICAL = "categorical"
-    """Convert to pandas categorical dtype (memory optimization, no transformation)"""
 
 
 class MissingValueStrategy(Enum):
-    """Strategies for handling missing values."""
+    """
+    Strategies for handling missing values.
+
+    Attributes
+    ----------
+    DROP_ROWS : str
+        Remove rows with missing values.
+    IMPUTE_MEAN : str
+        Impute missing values with column mean.
+    IMPUTE_MEDIAN : str
+        Impute missing values with column median.
+    IMPUTE_MODE : str
+        Impute missing values with column mode.
+    DROP_COLUMN : str
+        Remove the column entirely.
+    FILL_VALUE : str
+        Fill missing values with a specified constant.
+    LEAVE_AS_NA : str
+        Leave missing values as-is (no action taken).
+    """
 
     DROP_ROWS = "drop_rows"
-    """Remove rows with missing values"""
-
     IMPUTE_MEAN = "impute_mean"
-    """Impute missing values with column mean"""
-
     IMPUTE_MEDIAN = "impute_median"
-    """Impute missing values with column median"""
-
     IMPUTE_MODE = "impute_mode"
-    """Impute missing values with column mode"""
-
     DROP_COLUMN = "drop_column"
-    """Remove the column entirely"""
-
     FILL_VALUE = "fill_value"
-    """Fill missing values with a specified value"""
-
     LEAVE_AS_NA = "leave_as_na"
-    """Leave missing values as-is (no action taken)"""
 
 
 class OutlierStrategy(Enum):
-    """Strategies for handling outliers."""
+    """
+    Strategies for initial outlier detection/scaling.
+
+    Attributes
+    ----------
+    SCALING : str
+        Use StandardScaler to normalize values.
+    ROBUST_SCALER : str
+        Use RobustScaler to handle outliers.
+    REMOVE : str
+        Remove rows containing outliers.
+    """
 
     SCALING = "scaling"
-    """Use StandardScaler to normalize values"""
-
     ROBUST_SCALER = "robust_scaler"
-    """Use RobustScaler to handle outliers"""
-
     REMOVE = "remove"
-    """Remove rows with outliers"""
 
 
 class OutlierHandlingStrategy(Enum):
-    """Strategies for cleaning outliers by nullifying or clipping."""
+    """
+    Strategies for cleaning outliers by modification.
+
+    Attributes
+    ----------
+    NULLIFY : str
+        Set outliers beyond specified bounds to NaN.
+    CLIP : str
+        Cap outliers at the lower and upper bounds.
+    """
 
     NULLIFY = "nullify"
-    """Set outliers beyond bounds to NaN"""
-
     CLIP = "clip"
-    """Cap outliers at the lower and upper bounds"""
 
 
 class ImbalanceStrategy(Enum):
-    """Strategies for handling class imbalance."""
+    """
+    Strategies for handling class imbalance.
+
+    Attributes
+    ----------
+    SMOTE : str
+        Synthetic Minority Over-sampling Technique.
+    CLASS_WEIGHT : str
+        Adjust class weights within the model algorithm.
+    UPSAMPLING : str
+        Over-sample the minority class.
+    DOWNSAMPLING : str
+        Under-sample the majority class.
+    """
 
     SMOTE = "smote"
-    """Synthetic Minority Over-sampling Technique"""
-
     CLASS_WEIGHT = "class_weight"
-    """Adjust class weights in the model"""
-
     UPSAMPLING = "upsampling"
-    """Over-sample the minority class"""
-
     DOWNSAMPLING = "downsampling"
-    """Under-sample the majority class"""
 
 
 class ColumnHintType(Enum):
-    """Logical types for ColumnHint to guide recommendation generation."""
+    """
+    Logical types for ColumnHint to guide recommendations.
+
+    Attributes
+    ----------
+    DATETIME : str
+        Datetime column; extract temporal features or convert.
+    FINANCIAL : str
+        Financial value; apply floor/ceiling bounds.
+    CATEGORICAL : str
+        Convert to categorical dtype for memory efficiency.
+    NUMERIC : str
+        Standard numeric column; apply bounds if specified.
+    AGGREGATE : str
+        Aggregate multiple columns into a new feature.
+    GEOSPATIAL : str
+        Latitude/longitude columns; apply bounding box constraints.
+    DISTANCE : str
+        Distance-based column; specify unit and optional bounds.
+    """
 
     DATETIME = "datetime"
-    """Datetime column; extract temporal features or convert from string"""
-
     FINANCIAL = "financial"
-    """Financial/monetary value; apply floor/ceiling bounds"""
-
     CATEGORICAL = "categorical"
-    """Convert to categorical dtype for memory optimization"""
-
     NUMERIC = "numeric"
-    """Numeric column; apply floor/ceiling bounds if specified"""
-
     AGGREGATE = "aggregate"
-    """Aggregate multiple columns into a new feature"""
     GEOSPATIAL = "geospatial"
-    """Latitude/longitude columns; apply bounding box constraints"""
-
     DISTANCE = "distance"
-    """Distance-based column; specify unit and optional bounds"""
 
 
 class RoundingMode(Enum):
-    """Rounding modes for decimal precision operations."""
+    """
+    Rounding modes for decimal precision operations.
+
+    Attributes
+    ----------
+    NEAREST : str
+        Standard 'Round Half Up' (biased).
+    BANKERS : str
+        Round to nearest even (unbiased).
+    UP : str
+        Ceiling; always away from zero.
+    DOWN : str
+        Floor; always toward zero.
+    """
 
     NEAREST = "nearest"
-    """Standard 'Round Half Up' (biased) - 1.5→2.0, 2.5→3.0"""
-
     BANKERS = "bankers"
-    """Round to nearest even (unbiased) - 1.5→2.0, 2.5→2.0"""
-
     UP = "up"
-    """Ceiling - always away from zero - 1.5→2.0, 2.5→3.0"""
-
     DOWN = "down"
-    """Floor - always toward zero - 1.5→1.0, 2.5→2.0"""
 
 
 class BitDepth(Enum):
-    """Supported bit depths for numeric conversions."""
+    """
+    Supported bit depths for numeric conversions.
+
+    Attributes
+    ----------
+    INT32 : str
+        32-bit integer.
+    INT64 : str
+        64-bit integer.
+    FLOAT32 : str
+        32-bit floating point.
+    FLOAT64 : str
+        64-bit floating point.
+    """
 
     INT32 = "int32"
     INT64 = "int64"
@@ -200,4 +269,12 @@ class BitDepth(Enum):
 
     @property
     def is_float(self) -> bool:
+        """
+        Return True if the bit depth is a floating-point type.
+
+        Returns
+        -------
+        bool
+            True if float, False otherwise.
+        """
         return self in (BitDepth.FLOAT32, BitDepth.FLOAT64)

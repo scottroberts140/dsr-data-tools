@@ -7,27 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-09
+
+### Added
+
+- Support for FLOAT_CONVERSION in the RecommendationManager execution pipeline.
+
+### Fixed
+
+- Resolved an issue where BooleanClassificationRecommendation mapped invalid/mismatched strings to True.
+- Corrected unit scaling in DatetimeDurationRecommendation (defaulting to days vs minutes).
+
+### Performance
+
+- Full NumPy-style docstring coverage for the RecommendationManager.
+- Added default_date_format to RecommendationManager for more robust datetime inference.
+
 ## [1.1.0] - 2026-02-10
 
 ### Added
+
 - `RecommendationManager.enable_by_id()`
 - `RecommendationManager.disable_by_id()`
 - `RecommendationManager.toggle_enabled_by_id()`
 
 ### Fixed
+
 - Column-drop tracking now treats missing-value recommendations as dropping only when the strategy is `DROP_COLUMN`.
 
 ## [1.0.0] - 2026-02-08
 
 ### Breaking
+
 - Version reset to 1.0.0 to reflect non-backward-compatible changes across the library.
 
 ### Fixed
+
 - Test fixtures updated to align with current recommendation APIs and binning behavior.
 
 ## [0.0.6] - 2025-12-20
 
 ### Fixed
+
 - Fixed runtime error in `generate_interaction_recommendations` when `target_column` is None
   - Priority score for Status-Impact interactions now correctly uses computed variable instead of undefined mi_series reference
   - Ensures graceful fallback to 0.0 priority when no target column provided
@@ -35,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] - 2025-12-20
 
 ### Added
+
 - **Statistically Guided Feature Interactions**: Refactored `generate_interaction_recommendations()` to use statistical measures:
   - **Rule 1 (Status-Impact)**: Uses Mutual Information to identify binary columns most predictive of target, paired with high-variance continuous columns
   - **Rule 2 (Resource Density)**: Uses Pearson Correlation (>0.7) to identify complementary continuous columns for ratio features
@@ -58,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scikit-learn` added to dependencies for statistical feature selection
 
 ### Changed
+
 - **Breaking**: Columns flagged as `non_informative` now short-circuit all other recommendation checks
   - Ensures no conflicting recommendations for ID columns or high-cardinality object columns
   - Improves performance by skipping unnecessary analysis
@@ -69,6 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `generate_interaction_recommendations()` now accepts `target_column` and `random_state` parameters for statistically-guided recommendations
 
 ### Fixed
+
 - Variance comparison type errors when detecting high-variance columns
   - Added proper type guards and numeric checks before comparisons
   - Replaced list comprehension with explicit loop for better type safety
@@ -76,6 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type-checker warnings for optional float values and numpy bool conversions
 
 ### Performance
+
 - Cached `series.dropna()` as `non_null_series` to avoid repeated computation
 - Cached `non_null_series.unique()` as `non_null_unique` for reuse across checks
 - Lazy computation and caching of `non_null_min` and `non_null_max` values
@@ -88,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.4] - 2025-12-XX
 
 ### Initial
+
 - Core recommendation engine for data preprocessing
 - Support for missing values, encoding, outliers, class imbalance, and binning recommendations
 - Feature interaction recommendations based on statistical patterns

@@ -1,69 +1,80 @@
 """Recommendation models and orchestration for dataset preparation."""
 
-from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, field
-from typing import Any, cast, TYPE_CHECKING, Union, Iterable
-from collections.abc import Mapping
 import hashlib
 import json
 import uuid
+from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING, Any, Iterable, Union, cast
 
 if TYPE_CHECKING:
     from dsr_data_tools.recommendations import RecommendationManager
 
 import numpy as np
 import pandas as pd
-
 from dsr_utils.enums import DatetimeProperty
+
 from dsr_data_tools.enums import (
-    RecommendationType,
+    BitDepth,
+    ColumnHintType,
     EncodingStrategy,
-    MissingValueStrategy,
-    OutlierStrategy,
-    OutlierHandlingStrategy,
     ImbalanceStrategy,
     InteractionType,
-    ColumnHintType,
+    MissingValueStrategy,
+    OutlierHandlingStrategy,
+    OutlierStrategy,
+    RecommendationType,
     RoundingMode,
-    BitDepth,
 )
 
 
 def _generate_recommendation_id() -> str:
-    """Generate a unique ID for a recommendation."""
+    """
+    Generate a unique, short identifier for a recommendation instance.
+
+    Returns:
+        A string ID prefixed with 'rec_' followed by 8 random hex characters.
+    """
     return f"rec_{uuid.uuid4().hex[:8]}"
 
 
-def _detect_non_numeric_values(non_null_unique, value_counts) -> tuple[list[str], int]:
-    """Detect non-numeric placeholder values in a series.
+def _detect_non_numeric_values(
+    non_null_unique: np.ndarray, value_counts: pd.Series
+) -> tuple[list[str], int]:
+    """
+    Identify non-numeric string placeholders in a candidate numeric series.
 
-    Identifies string values that cannot be converted to float in a column
-    that should be numeric (has some numeric values).
+    Iterates through unique values to find strings that cannot be cast to float.
+    This is used to find sentinel values like 'N/A', 'tbd', or 'unknown' in
+    otherwise numeric columns.
 
     Args:
         non_null_unique: Array of unique non-null values from the series.
-        value_counts: Pre-computed value counts for the series.
+        value_counts: Frequency map of values in the series.
 
     Returns:
-        tuple[list[str], int]: A tuple of (list of non-numeric values, count of non-numeric occurrences).
-                              Empty list if all values are numeric or null.
-
-    Example:
-        >>> s = pd.Series([1.0, 2.0, 'tbd', 'N/A', 3.0])
-        >>> unique_vals = s.dropna().unique()
-        >>> val_counts = s.value_counts()
-        >>> _detect_non_numeric_values(unique_vals, val_counts)
-        (['tbd', 'N/A'], 2)
+        - A list of identified non-numeric placeholder strings.
+        - The total sum of occurrences (frequency) for these placeholders.
     """
-    non_numeric_values = []
-    non_numeric_count = 0
+    non_numeric_values: list[str] = []
+    non_numeric_count: int = 0
 
     for val in non_null_unique:
+        # Optimization: skip actual numbers immediately before trying string cast
+        if isinstance(val, (int, float, np.number)):
+            continue
+
         try:
+            # We use float() as the litmus test for 'numeric-ness'
             float(val)
         except (ValueError, TypeError):
-            non_numeric_values.append(str(val))
-            non_numeric_count += value_counts.get(val, 0)  # O(1) lookup
+            # Check for strings that aren't actually placeholder text (like empty strings)
+            val_str = str(val)
+            non_numeric_values.append(val_str)
+
+            # Use .get(val, 0) to safely access frequencies
+            non_numeric_count += int(value_counts.get(val, 0))
 
     return non_numeric_values, non_numeric_count
 
@@ -71,155 +82,122 @@ def _detect_non_numeric_values(non_null_unique, value_counts) -> tuple[list[str]
 @dataclass
 class Recommendation(ABC):
     """
-    Abstract base class for dataset preparation recommendations.
+    Abstract base class for all dataset transformation suggestions.
 
-    Each recommendation represents a suggested action to improve data quality
-    or prepare the dataset for machine learning.
+    A Recommendation defines a specific operation to be performed on a DataFrame.
+    It supports deterministic ID generation, allowing recommendations to be
+    tracked and persisted across multiple analysis sessions.
 
-    Read-only after creation: type, column_name, id.
-    Editable: description and any subclass-specific editable fields.
-
-    **Important: Stable IDs and Specification Changes**
-
-    Recommendation IDs are deterministically computed from the recommendation's class
-    name and ALL of its attributes. This ensures that identical recommendations always
-    get the same ID across different calls to analyze_dataset().
-
-    However, if the Recommendation class specification changes (e.g., new fields are
-    added, existing fields are modified), the ID WILL change for existing recommendations.
-    This is a breaking change for any hardcoded references to recommendation IDs in
-    user code.
-
-    Fields that WILL trigger ID changes if modified:
-    - Any editable field (e.g., strategy, properties, output_columns)
-    - Any field added/removed from the dataclass
-    - The recommendation class definition itself
-
-    Fields that will NOT trigger ID changes:
-    - enabled (editable for filtering, excluded from hash)
-    - description (for user notes, excluded from hash)
-    - alias (optional user-friendly name, excluded from hash)
-    - Pylance type checking won't affect IDs
-
-    Mitigation strategies for users:
-    1. Use version control to track ID changes when upgrading libraries
-    2. Use RecommendationManager.execution_summary() to see current IDs after analyze_dataset()
-    3. Store recommendation IDs in comments with the date/version for reference
-    4. Use manager.get_by_id() or manager.get_by_alias() to retrieve and verify recommendations exist before
-       operating on them (catches ID changes gracefully)
+    Attributes:
+        column_name: The target column for the transformation.
+        description: A human-readable summary of what this change achieves.
+        id: A deterministic 8-character hex ID (e.g., 'rec_a1b2c3d4').
+        enabled: If False, the RecommendationManager will skip this during `apply()`.
+        alias: An optional user-defined label for display purposes.
+        is_locked: True if this was generated from a User Hint (protected from auto-deletion).
     """
 
     @property
     @abstractmethod
     def rec_type(self) -> RecommendationType:
+        """The categorical type of the recommendation (e.g., TYPE_CONVERSION)."""
         pass
 
     column_name: str
     description: str
     id: str = field(default_factory=_generate_recommendation_id, init=False)
     enabled: bool = True
-    """Whether this recommendation should be applied (editable)"""
     alias: str | None = None
-    """Optional user-friendly name for this recommendation (editable, doesn't affect ID)"""
     is_locked: bool = False
-    """If True, indicates the recommendation was created from an explicit user hint and should not be auto-modified."""
     _locked: bool = field(default=False, init=False, repr=False)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if getattr(self, "_locked", False) and name in {"type", "column_name", "id"}:
+        """
+        Enforces read-only constraints on core identity fields after initialization.
+
+        Raises:
+            AttributeError: If attempting to modify 'column_name' or 'id' on a locked instance.
+        """
+        # We allow setting _locked itself, and we allow changes if _locked is False
+        if getattr(self, "_locked", False) and name in {"column_name", "id"}:
             raise AttributeError(
-                f"{name} is read-only once the recommendation is created"
+                f"Modification Error: '{name}' is part of the recommendation's "
+                f"identity and cannot be changed after creation."
             )
         super().__setattr__(name, value)
 
     def _lock_fields(self) -> None:
-        """Prevent further mutation of non-editable fields."""
+        """Transitions the instance to a read-only state for identity-defining fields."""
         object.__setattr__(self, "_locked", True)
 
     def _stable_id_payload(self) -> dict[str, Any]:
-        """Build a deterministic payload from recommendation fields for hashing.
+        """
+        Serializes the core attributes that define the uniqueness of this recommendation.
 
-        Excludes fields that should not affect the ID:
-        - id: The field being computed
-        - _locked: Internal state flag
-        - enabled: User-editable flag for filtering (doesn't change the recommendation itself)
-        - description: User-editable notes (not part of the recommendation's core identity)
-        - alias: Optional user-friendly name (doesn't change the recommendation's core identity)
-
-        All other fields are included in the hash, ensuring that any change to
-        editable parameters (strategy, properties, output_columns, etc.) will
-        produce a different ID.
-
-        Returns:
-            dict: Payload with id, _locked, enabled, description, and alias removed, ready for JSON serialization
+        Excludes volatile state like 'enabled' or UI-only fields like 'alias'.
         """
         data = asdict(self)
-        data.pop("id", None)
-        data.pop("_locked", None)
-        data.pop("enabled", None)
-        data.pop("description", None)
-        data.pop("alias", None)
-        data.pop("is_locked", None)
+        # Remove fields that do not contribute to identity
+        ignored_fields = {
+            "id",
+            "_locked",
+            "enabled",
+            "description",
+            "alias",
+            "is_locked",
+        }
+        for field_name in ignored_fields:
+            data.pop(field_name, None)
         return data
 
     def compute_stable_id(self) -> str:
-        """Compute a stable ID based on class name and recommendation attributes.
-
-        The ID is a SHA1 hash of the recommendation's class name and all attributes
-        (excluding id, _locked, enabled, and description fields). This ensures that
-        identical recommendations always produce the same ID.
-
-        **ID Stability Guarantees:**
-        - Same recommendation content → Same ID across runs
-        - Different editable values (strategy, properties, etc.) → Different ID
-        - Class definition change → Different ID for all instances of that class
-
-        **Important:** If the Recommendation class specification changes (fields added,
-        removed, or modified), the ID will change. See the Recommendation class docstring
-        for mitigation strategies.
+        """
+        Generates a deterministic SHA1 hash based on the class and its attributes.
 
         Returns:
-            str: Recommendation ID in format "rec_XXXXXXXX" (SHA1 first 8 hex chars)
+            A string in the format 'rec_XXXXXXXX'.
         """
         payload = {"class": self.__class__.__name__, "data": self._stable_id_payload()}
+        # sort_keys ensures that {a:1, b:2} and {b:2, a:1} produce the same hash
         json_str = json.dumps(payload, sort_keys=True, default=str)
-        return f"rec_{hashlib.sha1(json_str.encode('utf-8')).hexdigest()[:8]}"
+        hash_val = hashlib.sha1(json_str.encode("utf-8")).hexdigest()
+        return f"rec_{hash_val[:8]}"
 
     @abstractmethod
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Apply this recommendation to a dataset.
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            Modified DataFrame with recommendation applied
-        """
+        """Executes the transformation on the provided DataFrame."""
         pass
 
     @abstractmethod
     def info(self) -> None:
-        """Display formatted information about this recommendation."""
+        """Prints a developer/user-friendly summary of the recommendation."""
         pass
 
 
 @dataclass
 class NonInformativeRecommendation(Recommendation):
-    """Recommendation to remove non-informative columns."""
+    """
+    Recommendation to remove columns that provide no predictive or analytical value.
+
+    Commonly suggested for columns with zero variance (constant values),
+    100% missing data, or high-cardinality identifiers (like UUIDs) that
+    don't contribute to machine learning patterns.
+
+    Attributes:
+        reason: The specific diagnostic finding (e.g., 'Constant value', 'Unique IDs').
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.NON_INFORMATIVE
 
     reason: str = ""
-    """Explanation for why column is non-informative (e.g., 'High cardinality', 'Unique count == row count')"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "NonInformativeRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -229,38 +207,45 @@ class NonInformativeRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Remove the non-informative column.
+        Removes the target column from the DataFrame.
 
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with column removed
+        Uses 'errors=ignore' to ensure idempotency if the column was already removed.
         """
-        return df.drop(columns=[self.column_name])
+        return df.drop(columns=[self.column_name], errors="ignore")
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Prints the rationale for removal and the target column name."""
         print(f"  Recommendation: NON_INFORMATIVE")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
             print(f"    Source: User Hint")
+        print(f"    Column: '{self.column_name}'")
         print(f"    Reason: {self.reason}")
-        print(f"    Action: Drop column '{self.column_name}'")
+        print(f"    Action: Drop non-informative column")
 
 
 @dataclass
 class MissingValuesRecommendation(Recommendation):
-    """Recommendation for handling missing values with editable strategy.
+    """
+    Recommendation to handle null values using various imputation or removal strategies.
 
-    The strategy and fill_value are editable before applying the recommendation.
+    This is a highly interactive recommendation where the user can choose the best
+    fit for their domain—whether that's statistical imputation (mean/median/mode),
+    constant filling, or row/column removal.
+
+    Attributes:
+        missing_count: Absolute number of nulls detected.
+        missing_percentage: Null density (0-100%).
+        strategy: The chosen MissingValueStrategy (EDITABLE).
+        fill_value: The specific value used if strategy is 'FILL_VALUE' (EDITABLE).
     """
 
     @property
@@ -268,22 +253,15 @@ class MissingValuesRecommendation(Recommendation):
         return RecommendationType.MISSING_VALUES
 
     missing_count: int = 0
-    """Number of missing values in the column"""
-
     missing_percentage: float = 0.0
-    """Percentage of missing values (0-100)"""
-
     strategy: MissingValueStrategy = MissingValueStrategy.IMPUTE_MEAN
-    """Strategy for handling missing values (EDITABLE before apply)"""
-
     fill_value: str | int | float | None = None
-    """Fill value for FILL_VALUE strategy. Only used when strategy=FILL_VALUE (EDITABLE)"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "MissingValuesRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -293,129 +271,97 @@ class MissingValuesRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply missing value strategy to the column.
+        Applies the selected strategy to the dataset.
 
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with missing value strategy applied
+        Note: If a numeric strategy (mean/median) is selected for a non-numeric
+        column, the logic automatically falls back to mode-based imputation.
         """
-        result = df
+        if self.column_name not in df.columns:
+            return df
+
+        series = df[self.column_name]
+        is_numeric = pd.api.types.is_numeric_dtype(series)
 
         if self.strategy == MissingValueStrategy.DROP_ROWS:
-            result = result.dropna(subset=[self.column_name])
+            return df.dropna(subset=[self.column_name])
 
-        elif self.strategy == MissingValueStrategy.DROP_COLUMN:
-            result = result.drop(columns=[self.column_name])
+        if self.strategy == MissingValueStrategy.DROP_COLUMN:
+            return df.drop(columns=[self.column_name], errors="ignore")
 
-        elif self.strategy == MissingValueStrategy.IMPUTE_MEAN:
-            # Impute numeric with mean; for non-numeric, fallback to mode
-            if pd.api.types.is_numeric_dtype(result[self.column_name]):
-                fill_value = result[self.column_name].mean()
-                result[self.column_name] = result[self.column_name].fillna(fill_value)
-            else:
-                mode_value = result[self.column_name].mode()
-                if len(mode_value) > 0:
-                    result[self.column_name] = result[self.column_name].fillna(
-                        mode_value[0]
-                    )
-                else:
-                    result[self.column_name] = result[self.column_name].fillna(
-                        "Unknown"
-                    )
+        # Handle Imputation Strategies
+        target_fill = None
+
+        if self.strategy == MissingValueStrategy.IMPUTE_MEAN:
+            target_fill = series.mean() if is_numeric else self._get_mode(series)
 
         elif self.strategy == MissingValueStrategy.IMPUTE_MEDIAN:
-            # Impute numeric with median; for non-numeric, fallback to mode
-            if pd.api.types.is_numeric_dtype(result[self.column_name]):
-                fill_value = result[self.column_name].median()
-                result[self.column_name] = result[self.column_name].fillna(fill_value)
-            else:
-                mode_value = result[self.column_name].mode()
-                if len(mode_value) > 0:
-                    result[self.column_name] = result[self.column_name].fillna(
-                        mode_value[0]
-                    )
-                else:
-                    result[self.column_name] = result[self.column_name].fillna(
-                        "Unknown"
-                    )
+            target_fill = series.median() if is_numeric else self._get_mode(series)
 
         elif self.strategy == MissingValueStrategy.IMPUTE_MODE:
-            # Impute with mode for categorical/low-cardinality; numeric fallback to median
-            mode_value = result[self.column_name].mode()
-            if len(mode_value) > 0:
-                result[self.column_name] = result[self.column_name].fillna(
-                    mode_value[0]
-                )
-            else:
-                # If no mode (all NaN), choose median for numeric, else 'Unknown'
-                if pd.api.types.is_numeric_dtype(result[self.column_name]):
-                    fill_value = result[self.column_name].median()
-                    result[self.column_name] = result[self.column_name].fillna(
-                        fill_value
-                    )
-                else:
-                    result[self.column_name] = result[self.column_name].fillna(
-                        "Unknown"
-                    )
+            target_fill = self._get_mode(series)
 
         elif self.strategy == MissingValueStrategy.FILL_VALUE:
-            if self.fill_value is not None:
-                result[self.column_name] = result[self.column_name].fillna(
-                    self.fill_value
-                )
+            target_fill = self.fill_value
 
-        # MissingValueStrategy.LEAVE_AS_NA: Do nothing
+        if target_fill is not None:
+            df[self.column_name] = series.fillna(target_fill)
 
-        return result
+        return df
+
+    def _get_mode(self, series: pd.Series) -> Any:
+        """Helper to get the first mode value or a 'Unknown' fallback."""
+        modes = series.mode()
+        if not modes.empty:
+            return modes[0]
+        return "Unknown" if pd.api.types.is_object_dtype(series) else None
 
     def info(self) -> None:
-        """Display recommendation information including editable parameters."""
-        print(f"  Recommendation: {self.rec_type.name}")
+        """Displays null statistics and the currently selected strategy."""
+        print(f"  Recommendation: MISSING_VALUES")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
-        if self.is_locked:
-            print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(
-            f"    Missing count: {self.missing_count} ({self.missing_percentage:.1f}%)"
+            f"    Detected: {self.missing_count} nulls ({self.missing_percentage:.1f}%)"
         )
-        print(f"    Strategy: {self.strategy.value} (EDITABLE)")
+        print(f"    Current Strategy: {self.strategy.name} (EDITABLE)")
         if self.strategy == MissingValueStrategy.FILL_VALUE:
-            print(f"    Fill value: {self.fill_value} (EDITABLE)")
+            print(f"    Custom Fill Value: {self.fill_value}")
         print(f"    Action: {self._get_action_description()}")
 
     def _get_action_description(self) -> str:
-        """Get a human-readable description of the action."""
-        if self.strategy == MissingValueStrategy.DROP_ROWS:
-            return f"Remove {self.missing_count} rows with missing values"
-        elif self.strategy == MissingValueStrategy.DROP_COLUMN:
-            return f"Drop column '{self.column_name}' entirely"
-        elif self.strategy == MissingValueStrategy.IMPUTE_MEAN:
-            return f"Impute missing values using mean"
-        elif self.strategy == MissingValueStrategy.IMPUTE_MEDIAN:
-            return f"Impute missing values using median"
-        elif self.strategy == MissingValueStrategy.IMPUTE_MODE:
-            return f"Impute missing values using mode"
-        elif self.strategy == MissingValueStrategy.FILL_VALUE:
-            return f"Fill missing values with: {self.fill_value}"
-        elif self.strategy == MissingValueStrategy.LEAVE_AS_NA:
-            return f"Leave {self.missing_count} missing values as-is"
-        return ""
+        """Generates a human-readable summary of the chosen strategy."""
+        descriptions = {
+            MissingValueStrategy.DROP_ROWS: f"Drop {self.missing_count} rows with missing values",
+            MissingValueStrategy.DROP_COLUMN: f"Remove column '{self.column_name}'",
+            MissingValueStrategy.IMPUTE_MEAN: "Impute missing values using the mean (fallback to mode)",
+            MissingValueStrategy.IMPUTE_MEDIAN: "Impute missing values using the median (fallback to mode)",
+            MissingValueStrategy.IMPUTE_MODE: "Impute missing values using the mode",
+            MissingValueStrategy.FILL_VALUE: f"Fill missing values with '{self.fill_value}'",
+            MissingValueStrategy.LEAVE_AS_NA: "No action (leave values as NaN)",
+        }
+        return descriptions.get(self.strategy, "")
 
 
 @dataclass
 class EncodingRecommendation(Recommendation):
-    """Recommendation for encoding categorical columns with editable strategy.
+    """
+    Recommendation to transform categorical data into formats suitable for ML models.
 
-    The encoder_type is editable before applying the recommendation.
+    Categorical columns require transformation before they can be used in most
+    mathematical models. This class supports One-Hot Encoding (binary columns),
+    Label Encoding (integers), or Categorical Dtype (memory optimization).
+
+    Attributes:
+        encoder_type: The chosen EncodingStrategy (EDITABLE).
+        unique_values: Cardinality of the column, used to estimate the impact
+            of One-Hot encoding.
     """
 
     @property
@@ -423,16 +369,13 @@ class EncodingRecommendation(Recommendation):
         return RecommendationType.ENCODING
 
     encoder_type: EncodingStrategy = EncodingStrategy.ONEHOT
-    """Encoding strategy (EDITABLE before apply)"""
-
     unique_values: int = 0
-    """Number of unique values in the column"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "EncodingRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -442,109 +385,104 @@ class EncodingRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply encoding strategy to the column.
+        Executes the encoding transformation.
 
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with column encoded or converted to categorical
+        Note: Label and Ordinal strategies preserve null values as NaN/None.
+        One-Hot encoding generates new columns and removes the original.
         """
-        result = df
+        if self.column_name not in df.columns:
+            return df
 
         if self.encoder_type == EncodingStrategy.CATEGORICAL:
-            # Convert to categorical dtype (memory optimization)
-            result[self.column_name] = result[self.column_name].astype("category")
+            df[self.column_name] = df[self.column_name].astype("category")
 
         elif self.encoder_type == EncodingStrategy.ONEHOT:
-            # One-hot encode - creates binary columns for each category
-            result = pd.get_dummies(
-                result, columns=[self.column_name], drop_first=False
-            )
+            # get_dummies removes the original column by default when columns=[...] is used
+            df = pd.get_dummies(df, columns=[self.column_name], drop_first=False)
 
-            # Normalize one-hot encoded column names to lowercase snake_case
-            # (e.g., "region_East" -> "region_east")
-            onehot_cols = [
-                col for col in result.columns if col.startswith(self.column_name + "_")
-            ]
-            rename_map = {col: col.lower() for col in onehot_cols}
-            result = result.rename(columns=rename_map)
+            # Normalize new column names to lowercase for consistency
+            prefix = f"{self.column_name}_".lower()
+            rename_map = {
+                col: col.lower() for col in df.columns if col.lower().startswith(prefix)
+            }
+            df = df.rename(columns=rename_map)
 
         elif self.encoder_type == EncodingStrategy.LABEL:
-            # Label encode - assigns integer to each category
             from sklearn.preprocessing import LabelEncoder
 
             le = LabelEncoder()
-            # Handle potential NaN values
-            mask = result[self.column_name].notna()
-            encoded_values = le.fit_transform(
-                result.loc[mask, self.column_name].astype(str)
-            )
-            # Create new series with encoded values and NaN for masked rows
-            new_values = pd.Series(index=result.index, dtype="Int64")  # nullable int
-            new_values[mask] = encoded_values
-            result[self.column_name] = new_values
+            # Masking prevents NaNs from being treated as a distinct category 'nan'
+            mask = df[self.column_name].notna()
+            encoded = le.fit_transform(df.loc[mask, self.column_name].astype(str))
+
+            # Use nullable Int64 to maintain the NaN state
+            res_series = pd.Series(index=df.index, dtype="Int64")
+            res_series[mask] = encoded
+            df[self.column_name] = res_series
 
         elif self.encoder_type == EncodingStrategy.ORDINAL:
-            # Ordinal encode - preserves order
             from sklearn.preprocessing import OrdinalEncoder
 
             oe = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
-            result[self.column_name] = oe.fit_transform(result[[self.column_name]])
+            # OrdinalEncoder expects a 2D input (DataFrame)
+            df[self.column_name] = oe.fit_transform(df[[self.column_name]])
 
-        return result
+        return df
 
     def info(self) -> None:
-        """Display recommendation information including editable parameters."""
-        print(f"  Recommendation: {self.rec_type.name}")
+        """Displays cardinality and the selected encoding strategy."""
+        print(f"  Recommendation: ENCODING")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
-        if self.is_locked:
-            print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
-        print(f"    Unique values: {self.unique_values}")
-        print(f"    Encoder type: {self.encoder_type.value} (EDITABLE)")
-        print(f"    Description: {self.description}")
+        print(f"    Cardinality: {self.unique_values} unique values")
+        print(f"    Strategy: {self.encoder_type.name} (EDITABLE)")
         print(f"    Action: {self._get_action_description()}")
 
     def _get_action_description(self) -> str:
-        """Get a human-readable description of the encoding action."""
-        if self.encoder_type == EncodingStrategy.CATEGORICAL:
-            return f"Convert '{self.column_name}' to categorical dtype (memory optimization)"
-        elif self.encoder_type == EncodingStrategy.ONEHOT:
-            return f"Apply one-hot encoding to '{self.column_name}' ({self.unique_values} categories)"
-        elif self.encoder_type == EncodingStrategy.LABEL:
-            return f"Apply label encoding to '{self.column_name}'"
-        elif self.encoder_type == EncodingStrategy.ORDINAL:
-            return f"Apply ordinal encoding to '{self.column_name}'"
-        return ""
+        """Generates a human-readable summary of the encoding action."""
+        desc_map = {
+            EncodingStrategy.CATEGORICAL: f"Convert to Categorical dtype (reduces memory usage)",
+            EncodingStrategy.ONEHOT: f"Expand into {self.unique_values} binary features",
+            EncodingStrategy.LABEL: "Map categories to unique integers (preserves nulls)",
+            EncodingStrategy.ORDINAL: "Map categories to sequential integers (unknowns = -1)",
+        }
+        return desc_map.get(self.encoder_type, "Apply encoding")
 
 
 @dataclass
 class ClassImbalanceRecommendation(Recommendation):
-    """Recommendation for handling class imbalance in target variable."""
+    """
+    Recommendation to address skewed class distributions in target variables.
+
+    Severe class imbalance can cause models to ignore minority classes. This
+    recommendation suggests resampling techniques (oversampling, undersampling,
+    or synthetic generation like SMOTE) to be implemented during the model
+    training phase.
+
+    Attributes:
+        majority_percentage: The proportion of the dataset held by the dominant class.
+        strategy: The ImbalanceStrategy (e.g., SMOTE, UNDERSAMPLE) recommended (EDITABLE).
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.CLASS_IMBALANCE
 
     majority_percentage: float = 0.0
-    """Percentage of majority class"""
-
     strategy: ImbalanceStrategy = ImbalanceStrategy.SMOTE
-    """Recommended strategy for handling imbalance"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "ClassImbalanceRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -554,62 +492,63 @@ class ClassImbalanceRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply class imbalance strategy.
+        Returns the DataFrame unchanged.
 
-        Note: This is a simplified implementation. SMOTE and upsampling/downsampling
-        should be applied during cross-validation to prevent data leakage.
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame (or recommendation for model configuration)
+        Reason: Resampling should be performed within cross-validation loops
+        to prevent data leakage. This recommendation serves as a configuration
+        flag for the model training pipeline.
         """
-        # This recommendation is typically handled at model training time,
-        # not during data preparation. Return df unchanged as a placeholder.
         return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Displays imbalance statistics and training-time instructions."""
         print(f"  Recommendation: CLASS_IMBALANCE")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
-        if self.is_locked:
-            print(f"    Source: User Hint")
-        print(f"    Column: '{self.column_name}'")
-        print(f"    Majority class: {self.majority_percentage:.2f}%")
-        print(f"    Strategy: {self.strategy.value}")
-        print(f"    Action: Apply {self.strategy.value} during model training")
+        print(f"    Target Column: '{self.column_name}'")
+        print(f"    Skew: {self.majority_percentage:.1f}% Majority Class")
+        print(f"    Suggested Strategy: {self.strategy.name} (EDITABLE)")
+        print(f"    Note: This action is applied during training, not pre-processing.")
+
+    def _get_action_description(self) -> str:
+        """Describes the training-time configuration."""
+        return f"Configure training pipeline to use {self.strategy.value} on '{self.column_name}'"
 
 
 @dataclass
 class OutlierDetectionRecommendation(Recommendation):
-    """Recommendation for handling outliers."""
+    """
+    Recommendation to mitigate the impact of extreme numeric values.
+
+    Outliers can skew statistical models and lead to poor generalization.
+    This recommendation offers strategies to either squish extreme values
+    through robust scaling or remove them using the Interquartile Range (IQR) method.
+
+    Attributes:
+        strategy: The chosen OutlierStrategy (EDITABLE).
+        max_value: The highest value detected during analysis.
+        mean_value: The average value detected during analysis.
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.OUTLIER_DETECTION
 
     strategy: OutlierStrategy = OutlierStrategy.SCALING
-    """Recommended strategy for handling outliers"""
-
     max_value: float = 0.0
-    """Maximum value in the column"""
-
     mean_value: float = 0.0
-    """Mean value of the column"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "OutlierDetectionRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -619,77 +558,81 @@ class OutlierDetectionRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply outlier handling strategy to the column.
+        Applies scaling or row-removal based on the selected strategy.
 
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with outlier strategy applied
+        Warning: The 'REMOVE' strategy will filter the DataFrame and reset the index.
         """
-        result = df
+        if self.column_name not in df.columns:
+            return df
 
-        if self.strategy == OutlierStrategy.SCALING:
-            from sklearn.preprocessing import StandardScaler
+        if self.strategy in {OutlierStrategy.SCALING, OutlierStrategy.ROBUST_SCALER}:
+            from sklearn.preprocessing import RobustScaler, StandardScaler
 
-            scaler = StandardScaler()
-            # Handle NaN values
-            mask = result[self.column_name].notna()
-            scaled_values = scaler.fit_transform(result.loc[mask, [self.column_name]])
-            # Convert to float64 to avoid dtype incompatibility
-            result[self.column_name] = result[self.column_name].astype("float64")
-            result.loc[mask, self.column_name] = scaled_values.flatten()
+            # Select the appropriate scaler
+            scaler = (
+                RobustScaler()
+                if self.strategy == OutlierStrategy.ROBUST_SCALER
+                else StandardScaler()
+            )
 
-        elif self.strategy == OutlierStrategy.ROBUST_SCALER:
-            from sklearn.preprocessing import RobustScaler
-
-            scaler = RobustScaler()
-            # Handle NaN values
-            mask = result[self.column_name].notna()
-            scaled_values = scaler.fit_transform(result.loc[mask, [self.column_name]])
-            # Convert to float64 to avoid dtype incompatibility
-            result[self.column_name] = result[self.column_name].astype("float64")
-            result.loc[mask, self.column_name] = scaled_values.flatten()
+            mask = df[self.column_name].notna()
+            if mask.any():
+                # fit_transform expects a 2D array [[val1], [val2], ...]
+                scaled_values = scaler.fit_transform(df.loc[mask, [self.column_name]])
+                df[self.column_name] = df[self.column_name].astype("float64")
+                df.loc[mask, self.column_name] = scaled_values.flatten()
 
         elif self.strategy == OutlierStrategy.REMOVE:
-            # Remove rows where value exceeds 1.5 * IQR beyond quartiles
-            Q1 = result[self.column_name].quantile(0.25)
-            Q3 = result[self.column_name].quantile(0.75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
-            result = result[
-                (result[self.column_name] >= lower_bound)
-                & (result[self.column_name] <= upper_bound)
-            ].reset_index(drop=True)
+            q1 = df[self.column_name].quantile(0.25)
+            q3 = df[self.column_name].quantile(0.75)
+            iqr = q3 - q1
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
 
-        return result
+            # Filter and reset index to maintain a clean DataFrame state
+            df = df[(df[self.column_name] >= lower) & (df[self.column_name] <= upper)]
+            df = df.reset_index(drop=True)
+
+        return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Displays outlier statistics and the mitigation strategy."""
         print(f"  Recommendation: OUTLIER_DETECTION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
-        if self.is_locked:
-            print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
-        print(f"    Max value: {self.max_value:.2f}, Mean: {self.mean_value:.2f}")
-        print(f"    Strategy: {self.strategy.value}")
-        print(f"    Action: Apply {self.strategy.value} to handle outliers")
+        print(f"    Stats: Max={self.max_value:.2f}, Mean={self.mean_value:.2f}")
+        print(f"    Strategy: {self.strategy.name} (EDITABLE)")
+        print(f"    Action: {self._get_action_description()}")
+
+    def _get_action_description(self) -> str:
+        """Generates a summary of the handling method."""
+        if self.strategy == OutlierStrategy.REMOVE:
+            return "Remove rows outside 1.5x IQR (filtering)"
+        if self.strategy == OutlierStrategy.ROBUST_SCALER:
+            return "Scale values using median and quantiles (RobustScaler)"
+        return "Standardize values to zero mean and unit variance"
 
 
 @dataclass
 class OutlierHandlingRecommendation(Recommendation):
-    """Recommendation for cleaning outliers by nullifying or clipping values beyond bounds.
+    """
+    Recommendation to clean extreme values by capping them or setting them to NaN.
 
-    This is a data cleaning recommendation distinct from scaling transformations.
-    Allows setting explicit bounds and choosing between nullification or clipping strategies.
+    Unlike scaling (which transforms all values), this recommendation specifically
+    targets values outside of user-defined or detected bounds. This is useful for
+    removing sensor errors, unrealistic financial entries, or extreme noise.
+
+    Attributes:
+        strategy: NULLIFY (set to NaN) or CLIP (cap at the bound). (EDITABLE)
+        lower_bound: Values below this are treated as outliers. (EDITABLE)
+        upper_bound: Values above this are treated as outliers. (EDITABLE)
     """
 
     @property
@@ -697,19 +640,14 @@ class OutlierHandlingRecommendation(Recommendation):
         return RecommendationType.OUTLIER_HANDLING
 
     strategy: OutlierHandlingStrategy = OutlierHandlingStrategy.CLIP
-    """Strategy for handling outliers: NULLIFY (set to NaN) or CLIP (cap at bounds) (EDITABLE)"""
-
     lower_bound: float = 0.0
-    """Lower threshold - values below this are considered outliers (EDITABLE)"""
-
     upper_bound: float = 0.0
-    """Upper threshold - values above this are considered outliers (EDITABLE)"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "OutlierHandlingRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -719,73 +657,79 @@ class OutlierHandlingRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply outlier handling strategy using vectorized operations.
+        Executes outlier cleaning using vectorized operations.
 
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with outliers handled according to strategy
+        Note: NULLIFY will cast integer columns to float64 to accommodate NaN.
         """
-        result = df
-        column = result[self.column_name]
+        if self.column_name not in df.columns:
+            return df
 
         if self.strategy == OutlierHandlingStrategy.NULLIFY:
-            # Use boolean mask for vectorized nullification
-            mask = (column < self.lower_bound) | (column > self.upper_bound)
-            result.loc[mask, self.column_name] = np.nan
+            # Vectorized mask for values outside [lower, upper]
+            mask = (df[self.column_name] < self.lower_bound) | (
+                df[self.column_name] > self.upper_bound
+            )
+            df.loc[mask, self.column_name] = np.nan
 
         elif self.strategy == OutlierHandlingStrategy.CLIP:
-            # Use pandas clip() for efficient capping
-            result[self.column_name] = column.clip(
+            # Highly optimized capping operation
+            df[self.column_name] = df[self.column_name].clip(
                 lower=self.lower_bound, upper=self.upper_bound
             )
 
-        return result
+        return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Displays bound thresholds and the chosen cleaning action."""
         print(f"  Recommendation: OUTLIER_HANDLING")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
-        if self.is_locked:
-            print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
-        print(f"    Lower bound: {self.lower_bound:.2f} (EDITABLE)")
-        print(f"    Upper bound: {self.upper_bound:.2f} (EDITABLE)")
-        print(f"    Strategy: {self.strategy.value} (EDITABLE)")
+        print(
+            f"    Bounds: [{self.lower_bound:.2f}, {self.upper_bound:.2f}] (EDITABLE)"
+        )
+        print(f"    Strategy: {self.strategy.name} (EDITABLE)")
+        print(f"    Action: {self._get_action_description()}")
+
+    def _get_action_description(self) -> str:
+        """Generates a summary of how extreme values will be treated."""
+        bounds_str = f"[{self.lower_bound:.2f}, {self.upper_bound:.2f}]"
         if self.strategy == OutlierHandlingStrategy.NULLIFY:
-            print(
-                f"    Action: Set values outside [{self.lower_bound:.2f}, {self.upper_bound:.2f}] to NaN"
-            )
-        else:
-            print(
-                f"    Action: Clip values to range [{self.lower_bound:.2f}, {self.upper_bound:.2f}]"
-            )
+            return f"Set values outside {bounds_str} to NaN"
+        return f"Cap (clip) values to the range {bounds_str}"
 
 
 @dataclass
 class CategoricalConversionRecommendation(Recommendation):
-    """Recommendation to convert object column to pandas categorical dtype."""
+    """
+    Recommendation to convert a string/object column to the pandas 'category' dtype.
+
+    Categorical dtypes are highly efficient for columns with low-to-medium
+    cardinality. They reduce memory footprint by storing data as integer codes
+    pointing to a mapping table, which also speeds up operations like sorting
+    and grouping.
+
+    Attributes:
+        unique_values: The number of distinct categories found in the column.
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.CATEGORICAL_CONVERSION
 
     unique_values: int = 0
-    """Number of unique values in the column"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "CategoricalConversionRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -795,54 +739,60 @@ class CategoricalConversionRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Convert object column to pandas categorical dtype.
+        Converts the target column to 'category' dtype.
 
-        Categorical dtype reduces memory usage for columns with repetitive string values.
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with column converted to categorical type
+        Returns the original DataFrame if the column is missing.
         """
-        result = df
-        result[self.column_name] = result[self.column_name].astype("category")
-        return result
+        if self.column_name not in df.columns:
+            return df
+
+        df[self.column_name] = df[self.column_name].astype("category")
+        return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Displays memory optimization benefits and the target column."""
         print(f"  Recommendation: CATEGORICAL_CONVERSION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
+        if self.is_locked:
+            print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
-        print(f"    Unique values: {self.unique_values}")
+        print(f"    Cardinality: {self.unique_values} unique values")
         if self.alias:
             print(f"    Alias: {self.alias}")
-        print(f"    Action: Convert to categorical dtype (memory optimization)")
+        print(f"    Action: Convert to categorical dtype for memory optimization")
 
 
 @dataclass
 class BooleanClassificationRecommendation(Recommendation):
-    """Recommendation to treat numeric column as boolean."""
+    """
+    Recommendation to convert a binary-value column to a boolean dtype.
+
+    Identifies columns that contain exactly two unique values (e.g., 0/1, Y/N)
+    and suggests converting them to a proper boolean type for better
+    semantic clarity and memory efficiency.
+
+    Attributes:
+        values: The two unique values identified in the column.
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.BOOLEAN_CLASSIFICATION
 
     values: list[Any] = field(default_factory=list)
-    """The two unique values in the column"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "BooleanClassificationRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -852,55 +802,75 @@ class BooleanClassificationRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Convert numeric column to boolean type.
+        if self.column_name not in df.columns or len(self.values) != 2:
+            return df
 
-        Args:
-            df: Input DataFrame
+        # 1. Standardize indicators
+        # We look for common 'True' patterns to decide the mapping direction
+        TRUE_INDICATORS = {"Y", "YES", "1", "TRUE", "ON", "T", "ACTIVE"}
 
-        Returns:
-            DataFrame with column converted to boolean
-        """
-        result = df
-        result[self.column_name] = result[self.column_name].astype(bool)
-        return result
+        # Clean the detected values for comparison
+        val_a_str = str(self.values[0]).strip().upper()
+        val_b_str = str(self.values[1]).strip().upper()
+
+        # 2. Determine Mapping: If the first value is a 'True' indicator,
+        # it gets True and the second gets False. Otherwise, reverse it.
+        if val_a_str in TRUE_INDICATORS:
+            mapping = {self.values[0]: True, self.values[1]: False}
+        else:
+            # Default or specific 'val_b' as True
+            mapping = {self.values[0]: False, self.values[1]: True}
+
+        # 3. Vectorized replacement
+        # .replace() is better than .map() here because it won't introduce
+        # NaNs for values that don't match the dictionary keys.
+        df[self.column_name] = df[self.column_name].replace(mapping).astype(bool)
+
+        return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Displays the detected binary values and the conversion intent."""
         print(f"  Recommendation: BOOLEAN_CLASSIFICATION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
             print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
-        print(f"    Values: {self.values}")
-        print(f"    Action: Convert to boolean type")
+        print(f"    Detected Binary Values: {self.values}")
+        print(f"    Action: Map to True/False and convert to boolean dtype")
 
 
 @dataclass
 class BinningRecommendation(Recommendation):
-    """Recommendation to bin numeric column into categorical ranges."""
+    """
+    Recommendation to discretize a continuous numeric column into range-based bins.
+
+    This transformation is useful for non-linear numeric data. It segments
+    values into intervals (e.g., [0-10, 11-20]) and automatically expands
+    the result into multiple one-hot encoded binary features.
+
+    Attributes:
+        bins: List of numeric edges for the bins (e.g., [0, 10, 20, 100]).
+        labels: Descriptive names for the resulting categories (e.g., ['Low', 'Med', 'High']).
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.BINNING
 
     bins: list[float] = field(default_factory=list)
-    """Bin edges for pd.cut()"""
-
     labels: list[str] = field(default_factory=list)
-    """Labels for each bin"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "BinningRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -910,68 +880,91 @@ class BinningRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Bin the numeric column into categorical ranges.
+        Applies range-based binning followed by one-hot encoding.
 
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with column binned and one-hot encoded
+        Returns the original DataFrame if binning fails or the column is missing.
         """
-        result = df
+        if self.column_name not in df.columns:
+            return df
+
         try:
-            result[self.column_name] = pd.cut(
-                result[self.column_name],
+            # Step 1: Discretize the data
+            df[self.column_name] = pd.cut(
+                df[self.column_name],
                 bins=self.bins,
                 labels=self.labels,
                 right=True,
                 include_lowest=True,
             )
-        except Exception as e:
-            print(f"Warning: Could not bin column '{self.column_name}': {e}")
-            return result
 
-        # One-hot encode the binned column
-        result = pd.get_dummies(result, columns=[self.column_name], drop_first=False)
-        return result
+            # Step 2: Expand into binary features (One-Hot)
+            df = pd.get_dummies(df, columns=[self.column_name], drop_first=False)
+
+            # Normalize column names to lowercase to match our Encoding style
+            prefix = f"{self.column_name}_".lower()
+            df = df.rename(
+                columns={
+                    col: col.lower()
+                    for col in df.columns
+                    if col.lower().startswith(prefix)
+                }
+            )
+
+        except Exception as e:
+            import warnings
+
+            warnings.warn(f"Binning failed for '{self.column_name}': {e}")
+            return df
+
+        return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Displays binning edges and resulting categorical labels."""
         print(f"  Recommendation: BINNING")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
             print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
-        print(f"    Bins: {self.bins}")
-        print(f"    Labels: {self.labels}")
-        print(f"    Action: Bin into {len(self.labels)} categories and encode")
+        print(f"    Range Edges: {self.bins}")
+        print(f"    Category Labels: {self.labels}")
+        print(
+            f"    Action: Segment into {len(self.labels)} bins and expand via One-Hot encoding"
+        )
 
 
 @dataclass
 class IntegerConversionRecommendation(Recommendation):
-    """Recommendation to convert float64 to integer types."""
+    """
+    Recommendation to convert floating-point or object columns to integer types.
 
-    target_depth: BitDepth = BitDepth.INT32
+    This is suggested when a column contains whole numbers. By converting
+    to a specific bit-depth (e.g., int16, int32), memory usage is reduced
+    and data semantics are clarified.
+
+    Attributes:
+        target_depth: The specific bit-depth (BitDepth enum) for the conversion.
+        integer_count: The number of rows currently containing whole numbers.
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.INT_CONVERSION
 
+    target_depth: BitDepth = BitDepth.INT32
     integer_count: int = 0
-    """Number of integer values in the column"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "IntegerConversionRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -981,49 +974,78 @@ class IntegerConversionRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        # Check if the column is nullable (contains NaNs)
+        """
+        Converts the column to the target bit-depth.
+
+        Automatically detects NaNs and upgrades to Pandas' 'Nullable' integer
+        types (e.g., 'Int32' instead of 'int32') to prevent casting back to float.
+        """
+        if self.column_name not in df.columns:
+            return df
+
+        # Detect nulls to determine if we need a Nullable Extension Type
         has_nans = df[self.column_name].isna().any()
 
-        # Pandas uses capitalized 'Int32'/'Int64' for nullable integers
-        dtype_str: Any = self.target_depth.value
-        if has_nans:
-            dtype_str = dtype_str.capitalize()  # 'int32' -> 'Int32'
+        # Determine the string representation (e.g., "int32")
+        dtype_str: str = str(self.target_depth.value)
 
-        df[self.column_name] = df[self.column_name].astype(dtype_str)
+        if has_nans:
+            # Shift from standard numpy 'int' to Pandas nullable 'Int'
+            dtype_str = dtype_str.capitalize()
+
+        try:
+            df[self.column_name] = df[self.column_name].astype(cast(Any, dtype_str))
+        except (ValueError, TypeError) as e:
+            import warnings
+
+            warnings.warn(f"Integer conversion failed for '{self.column_name}': {e}")
+
         return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Displays target depth and the number of valid integers detected."""
         print(f"  Recommendation: INT_CONVERSION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
             print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
-        print(f"    Integer values: {self.integer_count}")
-        print(f"    Action: Convert to {self.target_depth.value}")
+        print(f"    Found: {self.integer_count} whole numbers")
+
+        # Indicate if we are using Nullable types in the action description
+        is_nullable = " (Nullable)" if "(None)" in str(self.target_depth) else ""
+        print(f"    Action: Convert to {self.target_depth.value}{is_nullable}")
 
 
 @dataclass
 class FloatConversionRecommendation(Recommendation):
-    """Recommendation to adjust float precision for memory or accuracy."""
+    """
+    Recommendation to optimize floating-point precision for memory or speed.
 
-    target_depth: BitDepth = BitDepth.FLOAT32
+    Downcasting (e.g., from float64 to float32) can drastically reduce memory
+    usage in large datasets. While float64 offers higher precision, float32 is
+    typically sufficient for the majority of machine learning use cases.
+
+    Attributes:
+        target_depth: The specific bit-depth (BitDepth enum) for the conversion.
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.FLOAT_CONVERSION
 
+    target_depth: BitDepth = BitDepth.FLOAT32
+
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "FloatConversionRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1033,24 +1055,35 @@ class FloatConversionRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Applies the precision change to the specified column."""
-        # Use .astype() with the string value of the Enum
+        """
+        Converts the column to the target floating-point bit-depth.
+
+        Standard floating-point types (float32, float64) natively support NaNs.
+        """
+        if self.column_name not in df.columns:
+            return df
+
         try:
-            # We use copy=False where possible to save memory,
-            # though astype usually creates a copy if the type changes.
-            df[self.column_name] = df[self.column_name].astype(self.target_depth.value)
-        except Exception as e:
-            # Replace with your library's logging/warning system
-            print(f"Failed to convert {self.column_name}: {e}")
+            # Cast to Any to satisfy static type checkers regarding overloads
+            from typing import Any, cast
+
+            df[self.column_name] = df[self.column_name].astype(
+                cast(Any, self.target_depth.value)
+            )
+        except (ValueError, TypeError) as e:
+            import warnings
+
+            warnings.warn(f"Float conversion failed for '{self.column_name}': {e}")
+
         return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Displays target precision and the target column."""
         print(f"  Recommendation: FLOAT_CONVERSION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
@@ -1062,12 +1095,20 @@ class FloatConversionRecommendation(Recommendation):
 
 @dataclass
 class DecimalPrecisionRecommendation(Recommendation):
-    """Recommendation to optimize decimal precision in float columns.
+    """
+    Recommendation to standardize decimal precision and optimize numeric storage.
 
-    This recommendation identifies float columns where decimal precision can be
-    reduced. The max_decimal_places parameter is editable, allowing the user to
-    adjust precision before applying the recommendation. If max_decimal_places is 0
-    and all values are integers after rounding, the column can be converted to int64.
+    Standardizes floating-point columns by rounding to a specific decimal depth.
+    If rounding results in whole numbers, it can automatically convert the column
+    to an integer type. For remaining floats, it suggests downcasting to float32
+    to reduce memory usage.
+
+    Attributes:
+        max_decimal_places: Maximum decimal digits to retain. (EDITABLE)
+        min_value/max_value: Reference bounds for the column's data.
+        convert_to_int: If True, attempts integer conversion after rounding.
+        rounding_mode: The algorithm (NEAREST, BANKERS, etc.) used. (EDITABLE)
+        scale_factor: Multiplier applied before the rounding step.
     """
 
     @property
@@ -1075,28 +1116,17 @@ class DecimalPrecisionRecommendation(Recommendation):
         return RecommendationType.DECIMAL_PRECISION_OPTIMIZATION
 
     max_decimal_places: int = 0
-    """Maximum number of decimal places to retain (user-editable)"""
-
     min_value: float = 0.0
-    """Minimum value in the column (for reference)"""
-
     max_value: float = 0.0
-    """Maximum value in the column (for reference)"""
-
     convert_to_int: bool = False
-    """Whether to convert to int64 if max_decimal_places is 0 and all values are integers"""
-
     rounding_mode: RoundingMode = RoundingMode.NEAREST
-    """Rounding mode for decimal operations (default: NEAREST)"""
-
     scale_factor: float | None = None
-    """Scale factor to apply before rounding (e.g., 1/1024 to convert MB to GB)"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "DecimalPrecisionRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1106,73 +1136,97 @@ class DecimalPrecisionRecommendation(Recommendation):
             )
         return rec
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        result = df
-        try:
-            series = result[self.column_name]
+        """
+        Executes scaling, rounding, and conditional type-downcasting.
+        """
+        if self.column_name not in df.columns:
+            return df
 
-            # 1. Scale and Round
-            factor = 10**self.max_decimal_places
+        try:
+            from typing import Any, cast
+
+            series = df[self.column_name]
+
+            # 1. Scaling
             if self.scale_factor is not None:
                 series = series * self.scale_factor
 
+            # 2. Rounding
+            factor = 10**self.max_decimal_places
             if self.rounding_mode == RoundingMode.BANKERS:
                 series = np.round(series * factor) / factor
             elif self.rounding_mode == RoundingMode.UP:
                 series = np.ceil(series * factor) / factor
             elif self.rounding_mode == RoundingMode.DOWN:
                 series = np.floor(series * factor) / factor
-            else:  # NEAREST
+            else:  # NEAREST / Half-Up
                 series = np.floor(series * factor + 0.5) / factor
 
-            # 2. Integer Check
+            # 3. Type Optimization
             non_null = series.dropna()
-            if len(non_null) > 0 and ((non_null % 1) == 0).all():
+
+            # Check if we should/can convert to Integer
+            if (
+                self.convert_to_int
+                and not non_null.empty
+                and ((non_null % 1) == 0).all()
+            ):
                 dtype = "Int64" if series.isna().any() else "int64"
-                result[self.column_name] = series.astype(dtype)
+                df[self.column_name] = series.astype(cast(Any, dtype))
+
+            # Otherwise, downcast to float32 if precision is low enough
+            elif self.max_decimal_places <= 6:
+                df[self.column_name] = series.astype(cast(Any, "float32"))
             else:
-                # 3. If it's still a float, downcast to save 50% RAM
-                # float32 is safe for up to 6-7 decimal places
-                if self.max_decimal_places <= 6:
-                    result[self.column_name] = series.astype("float32")
-                else:
-                    result[self.column_name] = series
+                df[self.column_name] = series
 
         except Exception as e:
-            print(
-                f"Warning: Could not optimize decimal precision for '{self.column_name}': {e}"
+            import warnings
+
+            warnings.warn(
+                f"Precision optimization failed for '{self.column_name}': {e}"
             )
-            return result
-        return result
+
+        return df
 
     def info(self) -> None:
-        """Display recommendation information."""
-        print(f"  Recommendation: DECIMAL_PRECISION_OPTIMIZATION")
+        """Displays rounding configuration and memory optimization status."""
+        print(f"  Recommendation: DECIMAL_PRECISION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
             print(f"    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
-        print(f"    Range: {self.min_value} to {self.max_value}")
-        print(f"    Max decimal places: {self.max_decimal_places} (EDITABLE)")
-        if self.max_decimal_places == 0:
-            print(f"    Convert to int64: {self.convert_to_int}")
-        print(f"    Action: Round to {self.max_decimal_places} decimal places")
+        print(f"    Data Range: [{self.min_value}, {self.max_value}]")
+        print(
+            f"    Strategy: Round to {self.max_decimal_places} places ({self.rounding_mode.name})"
+        )
+
         if self.max_decimal_places == 0 and self.convert_to_int:
-            print(f"           Then convert to int64")
+            print(f"    Optimization: Will attempt conversion to Integer")
+        elif self.max_decimal_places <= 6:
+            print(f"    Optimization: Will downcast to float32 (memory savings)")
 
 
 @dataclass
 class ValueReplacementRecommendation(Recommendation):
-    """Recommendation for replacing non-numeric placeholder values with NaN.
+    """
+    Recommendation to replace non-numeric placeholder strings with a numeric-compatible value.
 
-    Detects columns with non-numeric string placeholders (like 'tbd', 'N/A')
-    that should be numeric. The values to replace and replacement value are
-    editable before applying.
+    This detector identifies columns that are primarily numeric but contain specific
+    string-based placeholders (e.g., 'n/a', 'tbd', 'unknown'). It allows for
+    batch replacement to prepare the column for numeric casting.
+
+    Attributes:
+        non_numeric_values: A list of specific strings identified as placeholders.
+        non_numeric_count: The total occurrences of these placeholders in the column.
+        replacement_value: The value to insert in place of the strings. Defaults to
+            `np.nan`, but can be modified by the user (e.g., to 0 or -1).
     """
 
     @property
@@ -1180,19 +1234,19 @@ class ValueReplacementRecommendation(Recommendation):
         return RecommendationType.VALUE_REPLACEMENT
 
     non_numeric_values: list[str] = field(default_factory=list)
-    """List of non-numeric placeholder values found in column (e.g., ['tbd'])"""
-
     non_numeric_count: int = 0
-    """Total count of non-numeric values"""
-
     replacement_value: float | str = np.nan
-    """Value to replace non-numeric placeholders with (EDITABLE, default: np.nan)"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "ValueReplacementRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """
+        Retrieves and validates a recommendation of this specific type from the manager.
+
+        Raises:
+            TypeError: If the recommendation exists but is not a ValueReplacementRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1208,26 +1262,23 @@ class ValueReplacementRecommendation(Recommendation):
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Replace non-numeric placeholder values with specified replacement value.
+        Executes the replacement on the target column.
 
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with non-numeric values replaced
+        Note: This method uses a single pass replacement. It does not automatically
+        cast the column to a numeric type, as other recommendations in the pipeline
+        may handle type conversion.
         """
-        result = df
+        if not self.non_numeric_values:
+            return df
 
-        # Replace each non-numeric value with the replacement value
-        for val in self.non_numeric_values:
-            result[self.column_name] = result[self.column_name].replace(
-                val, self.replacement_value
-            )
-
-        return result
+        # Optimization: Pass the whole list to .replace() for a single-pass operation
+        df[self.column_name] = df[self.column_name].replace(
+            self.non_numeric_values, self.replacement_value
+        )
+        return df
 
     def info(self) -> None:
-        """Display recommendation information including editable parameters."""
+        """Prints a summary of the placeholders found and the intended replacement."""
         print(f"  Recommendation: {self.rec_type.name}")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
@@ -1240,20 +1291,30 @@ class ValueReplacementRecommendation(Recommendation):
         print(f"    Action: {self._get_action_description()}")
 
     def _get_action_description(self) -> str:
-        """Get a human-readable description of the replacement action."""
-        values_str = "', '".join(self.non_numeric_values)
-        if pd.isna(self.replacement_value):
-            return f"Replace '{values_str}' with NaN in '{self.column_name}'"
-        else:
-            return f"Replace '{values_str}' with '{self.replacement_value}' in '{self.column_name}'"
+        """Generates a human-readable summary of the replacement action."""
+        values_str = "', '".join(map(str, self.non_numeric_values))
+        target = (
+            "NaN" if pd.isna(self.replacement_value) else f"'{self.replacement_value}'"
+        )
+        return f"Replace '{values_str}' with {target} in '{self.column_name}'"
 
 
 @dataclass
 class FeatureInteractionRecommendation(Recommendation):
-    """Recommendation to create a feature interaction between two columns.
+    """
+    Recommendation to engineer a new feature by combining two existing columns.
 
-    Suggests creating derived features by combining two columns based on
-    statistical patterns (e.g., binary × continuous, continuous / continuous).
+    This identifies statistically significant interactions—such as multiplying
+    unit price by quantity or dividing revenue by headcount—to create
+    higher-order features for modeling.
+
+    Attributes:
+        column_name_2: The secondary column used in the interaction.
+        interaction_type: The domain-specific category of the interaction.
+        operation: The mathematical operator ('*' or '/').
+        rationale: A human-readable explanation of the feature's potential value.
+        derived_name: The name of the new column (default auto-generated).
+        priority_score: Magnitude of the statistical signal (0.0 to 1.0).
     """
 
     @property
@@ -1261,28 +1322,17 @@ class FeatureInteractionRecommendation(Recommendation):
         return RecommendationType.FEATURE_INTERACTION
 
     column_name_2: str = ""
-    """Second column name for the interaction"""
-
     interaction_type: InteractionType = InteractionType.STATUS_IMPACT
-    """Type of interaction (STATUS_IMPACT, RESOURCE_DENSITY, PRODUCT_UTILIZATION)"""
-
     operation: str = "*"
-    """Operation to perform: '*' (multiply), '/' (divide)"""
-
     rationale: str = ""
-    """Explanation for why this interaction is recommended"""
-
     derived_name: str = ""
-    """Name for the derived feature (EDITABLE)"""
-
     priority_score: float = 0.0
-    """Priority score for the interaction (0.0-1.0 scale, higher = more important)"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "FeatureInteractionRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve the recommendation by ID, ensuring correct subclass typing."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1293,77 +1343,79 @@ class FeatureInteractionRecommendation(Recommendation):
         return rec
 
     def __post_init__(self):
-        """Auto-generate derived_name if not set."""
+        """Initializes identifiers and handles default naming logic."""
         if not self.derived_name:
-            if self.operation == "*":
-                self.derived_name = f"{self.column_name}_{self.column_name_2}"
-            else:
-                self.derived_name = f"{self.column_name}_vs_{self.column_name_2}"
+            suffix = self.column_name_2
+            sep = "_" if self.operation == "*" else "_vs_"
+            self.derived_name = f"{self.column_name}{sep}{suffix}"
+
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Create the interaction feature in the dataset.
+        Calculates the interaction and appends the new column to the DataFrame.
 
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with new interaction column added
+        Handles division by zero by converting denominators of 0 to NaN.
         """
         if self.column_name not in df.columns or self.column_name_2 not in df.columns:
-            raise ValueError(
-                f"Column '{self.column_name}' or '{self.column_name_2}' not found in DataFrame"
+            raise KeyError(
+                f"Interaction failed: One or both columns ('{self.column_name}', "
+                f"'{self.column_name_2}') missing from DataFrame."
             )
 
         if self.operation == "*":
             df[self.derived_name] = df[self.column_name] * df[self.column_name_2]
         elif self.operation == "/":
-            # Avoid division by zero
-            df[self.derived_name] = df[self.column_name] / df[
-                self.column_name_2
-            ].replace(0, np.nan)
+            # Guard against ZeroDivisionError by coercing 0 to NaN
+            denominator = df[self.column_name_2].replace(0, np.nan)
+            df[self.derived_name] = df[self.column_name] / denominator
         else:
-            raise ValueError(f"Unknown operation: {self.operation}")
+            raise ValueError(f"Unsupported interaction operation: {self.operation}")
 
         return df
 
     def info(self) -> None:
-        """Display recommendation information."""
-        operation_name = (
-            "multiply"
-            if self.operation == "*"
-            else "divide" if self.operation == "/" else self.operation
-        )
-        print(f"  Recommendation: FEATURE_INTERACTION")
+        """Prints a detailed summary of the feature engineering step."""
+        op_map = {"*": "multiplication", "/": "division"}
+        op_desc = op_map.get(self.operation, self.operation)
+
+        print(f"  Recommendation: FEATURE_INTERACTION ({op_desc})")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(
-            f"    Input columns: '{self.column_name}' {self.operation} '{self.column_name_2}'"
+            f"    Interaction: '{self.column_name}' {self.operation} '{self.column_name_2}'"
         )
-        print(f"    Output column: '{self.derived_name}' (EDITABLE)")
-        print(f"    Type: {self.interaction_type.value}")
-        print(f"    Priority Score: {self.priority_score:.2f}")
+        print(f"    Resulting Column: '{self.derived_name}'")
         print(f"    Rationale: {self.rationale}")
+        print(f"    Priority Score: {self.priority_score:.2f}")
 
 
 @dataclass
 class DatetimeConversionRecommendation(Recommendation):
-    """Recommendation to convert object/string column to datetime dtype."""
+    """
+    Recommendation to convert a string or object column into a datetime object.
+
+    Proper datetime typing enables time-series analysis, period extraction,
+    and optimized storage. If a specific format string is provided, conversion
+    is significantly faster and more reliable.
+
+    Attributes:
+        detected_format: The strptime format string (e.g., '%Y-%m-%d %H:%M:%S').
+            If None, the parser will attempt to infer the format for each row.
+    """
 
     @property
     def rec_type(self) -> RecommendationType:
         return RecommendationType.DATETIME_CONVERSION
 
     detected_format: str | None = None
-    """The detected strptime format string, or None if no consistent format found"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "DatetimeConversionRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1374,46 +1426,62 @@ class DatetimeConversionRecommendation(Recommendation):
         return rec
 
     def __post_init__(self):
+        """Finalizes the unique identifier and locks the recommendation state."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        result = df
-        # Use the pre-detected format for performance; fallback to generic parsing
-        series = result[self.column_name]
+        """
+        Converts the target column to datetime64[ns] dtype.
+
+        Uses the pre-detected format if available for maximum speed.
+        Falls back to 'mixed' parsing if the format is unknown.
+        Uses format="mixed" for flexible inference when no explicit format is detected,
+        ensuring compatibility with varied string representations in the same column.
+        """
         if self.detected_format:
-            result[self.column_name] = pd.to_datetime(
-                series, format=self.detected_format, errors="coerce"
+            # High performance: we know exactly what we are looking for
+            df[self.column_name] = pd.to_datetime(
+                df[self.column_name], format=self.detected_format, errors="coerce"
             )
         else:
-            result[self.column_name] = pd.to_datetime(series, errors="coerce")
-        return result
+            # Flexible: handles multiple formats within the same column
+            df[self.column_name] = pd.to_datetime(
+                df[self.column_name], format="mixed", errors="coerce"
+            )
+        return df
 
     def info(self) -> None:
-        print(f"  Recommendation: {self.rec_type.name}")
+        """Displays the conversion details and the format string being used."""
+        print(f"  Recommendation: DATETIME_CONVERSION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Column: '{self.column_name}'")
+
         if self.detected_format:
-            print(
-                f"    Action: Convert to datetime using format {self.detected_format}"
-            )
+            print(f"    Format Found: '{self.detected_format}'")
+            print(f"    Action: Convert to datetime using specified format.")
         else:
-            print(f"    Action: Convert to datetime dtype (coerce invalid to NaT)")
+            print(f"    Format Found: None (Auto-detect)")
+            print(f"    Action: Convert to datetime (invalid values coerced to NaT).")
 
 
 @dataclass
 class FeatureExtractionRecommendation(Recommendation):
-    """Recommendation to extract derived features from a column.
+    """
+    Recommendation to derive granular features from complex types, primarily datetimes.
 
-    Currently supports datetime feature extraction (Year, Month, DayOfWeek, Hour, etc.).
-    Can be extended for other feature extraction types in the future.
-    All attributes are editable by the user before applying the recommendation.
+    This class decomposes datetime columns into constituent parts (Year, Month, etc.)
+    and supports cyclic encoding (Sine/Cosine transforms). Cyclic encoding is
+    essential for models to understand that time is periodic (e.g., December and
+    January are 'close').
 
-    If only one member of a SIN/COS pair is given a custom output column in
-    ``output_columns``, the missing mate is inferred by swapping the prefix
-    (``sin`` -> ``cos`` or vice versa). This keeps paired cyclic features
-    aligned without requiring duplicate entries.
+    Attributes:
+        properties: A bitmask (DatetimeProperty) defining which features to extract.
+        output_prefix: A string prepended to auto-generated column names.
+        output_columns: A dictionary for manual column renaming. If a 'sin'
+            column is renamed, the 'cos' counterpart is automatically renamed
+            to match if not explicitly provided.
     """
 
     @property
@@ -1421,17 +1489,8 @@ class FeatureExtractionRecommendation(Recommendation):
         return RecommendationType.FEATURE_EXTRACTION
 
     properties: DatetimeProperty = DatetimeProperty(0)
-    """Flags indicating which datetime properties to extract"""
-
     output_prefix: str = ""
-    """Optional prefix for generated feature column names (EDITABLE). If empty, uses '{column_name}_'"""
-
     output_columns: dict[str, str] | None = None
-    """Optional mapping of feature names to custom output column names (EDITABLE).
-    Only features in this mapping receive custom names; unmapped features use auto-generated names
-    from output_prefix. E.g., {'year': 'birth_year', 'month': 'birth_month'} will custom-name only
-    'year' and 'month', while 'day' might become 'column_day' if not in mapping. Partial mappings
-    are fully supported—users need not specify all features."""
 
     @classmethod
     def get_by_id(
@@ -1452,142 +1511,134 @@ class FeatureExtractionRecommendation(Recommendation):
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        result = df
+        """
+        Extracts selected properties and appends them as new columns to the DataFrame.
 
-        # Check if column is datetime type
-        if not pd.api.types.is_datetime64_any_dtype(result[self.column_name]):
-            # Try to convert if it's not already datetime
+        Attempts a 'mixed' datetime conversion if the target column is not already
+        a datetime type. Returns the original DataFrame if conversion fails.
+        """
+        # Ensure we are working with datetimes
+        if not pd.api.types.is_datetime64_any_dtype(df[self.column_name]):
             try:
-                result[self.column_name] = pd.to_datetime(
-                    result[self.column_name], errors="coerce"
+                # Use "mixed" to match our utility's detection logic
+                df[self.column_name] = pd.to_datetime(
+                    df[self.column_name], errors="coerce", format="mixed"
                 )
             except Exception:
-                return result  # Can't extract features if conversion fails
+                return df
 
-        # Determine the prefix for output columns
         prefix = self.output_prefix if self.output_prefix else f"{self.column_name}_"
-
-        # Vectorized extraction using pandas .dt and numpy (avoid per-row loops)
-        from typing import Any
-
-        dt_accessor: Any = result[self.column_name].dt
+        dt = df[self.column_name].dt
         feature_series: dict[str, pd.Series] = {}
 
+        # Standard Extractions
         if DatetimeProperty.YEAR in self.properties:
-            feature_series["year"] = dt_accessor.year
+            feature_series["year"] = dt.year
         if DatetimeProperty.MONTH in self.properties:
-            feature_series["month"] = dt_accessor.month
+            feature_series["month"] = dt.month
         if DatetimeProperty.DAY in self.properties:
-            feature_series["day"] = dt_accessor.day
+            feature_series["day"] = dt.day
         if DatetimeProperty.DAYOFWEEK in self.properties:
-            feature_series["dayofweek"] = dt_accessor.dayofweek
+            feature_series["dayofweek"] = dt.dayofweek
         if DatetimeProperty.DAYOFYEAR in self.properties:
-            feature_series["dayofyear"] = dt_accessor.dayofyear
+            feature_series["dayofyear"] = dt.dayofyear
         if DatetimeProperty.QUARTER in self.properties:
-            feature_series["quarter"] = dt_accessor.quarter
+            feature_series["quarter"] = dt.quarter
         if DatetimeProperty.WEEK in self.properties:
-            feature_series["week"] = dt_accessor.isocalendar().week
-        if DatetimeProperty.IS_MONTH_END in self.properties:
-            feature_series["is_month_end"] = dt_accessor.is_month_end
-        if DatetimeProperty.IS_MONTH_START in self.properties:
-            feature_series["is_month_start"] = dt_accessor.is_month_start
+            feature_series["week"] = dt.isocalendar().week
         if DatetimeProperty.HOUR in self.properties:
-            feature_series["hour"] = dt_accessor.hour
+            feature_series["hour"] = dt.hour
         if DatetimeProperty.MINUTE in self.properties:
-            feature_series["minute"] = dt_accessor.minute
+            feature_series["minute"] = dt.minute
         if DatetimeProperty.SECOND in self.properties:
-            feature_series["second"] = dt_accessor.second
+            feature_series["second"] = dt.second
+        if DatetimeProperty.IS_MONTH_END in self.properties:
+            feature_series["is_month_end"] = dt.is_month_end
+        if DatetimeProperty.IS_MONTH_START in self.properties:
+            feature_series["is_month_start"] = dt.is_month_start
+
+        # Cyclic encoding helpers
+        def _to_rad_series(series: pd.Series, max_val: float) -> pd.Series:
+            return series * (2 * np.pi / max_val)
+
         if DatetimeProperty.SIN_HOUR in self.properties:
-            radians = dt_accessor.hour * (2 * np.pi / 24)
-            feature_series["sin_hour"] = np.sin(radians)
+            feature_series["sin_hour"] = pd.Series(np.sin(_to_rad_series(dt.hour, 24)))
         if DatetimeProperty.COS_HOUR in self.properties:
-            radians = dt_accessor.hour * (2 * np.pi / 24)
-            feature_series["cos_hour"] = np.cos(radians)
-
-        # Cyclic encoding for Day of Week (0-6, divisor=7)
+            feature_series["cos_hour"] = pd.Series(np.cos(_to_rad_series(dt.hour, 24)))
         if DatetimeProperty.SIN_DAYOFWEEK in self.properties:
-            radians = dt_accessor.dayofweek * (2 * np.pi / 7)
-            feature_series["sin_dayofweek"] = np.sin(radians)
+            feature_series["sin_dayofweek"] = pd.Series(
+                np.sin(_to_rad_series(dt.dayofweek, 7))
+            )
         if DatetimeProperty.COS_DAYOFWEEK in self.properties:
-            radians = dt_accessor.dayofweek * (2 * np.pi / 7)
-            feature_series["cos_dayofweek"] = np.cos(radians)
-
-        # Cyclic encoding for Month (1-12, divisor=12 with 1-based adjustment)
+            feature_series["cos_dayofweek"] = pd.Series(
+                np.cos(_to_rad_series(dt.dayofweek, 7))
+            )
         if DatetimeProperty.SIN_MONTH in self.properties:
-            radians = (dt_accessor.month - 1) * (2 * np.pi / 12)
-            feature_series["sin_month"] = np.sin(radians)
+            feature_series["sin_month"] = pd.Series(
+                np.sin(_to_rad_series(dt.month - 1, 12))
+            )
         if DatetimeProperty.COS_MONTH in self.properties:
-            radians = (dt_accessor.month - 1) * (2 * np.pi / 12)
-            feature_series["cos_month"] = np.cos(radians)
+            feature_series["cos_month"] = pd.Series(
+                np.cos(_to_rad_series(dt.month - 1, 12))
+            )
 
-        # Prepare output column mapping with inferred SIN/COS mates when only one side is provided
-        effective_output_columns: dict[str, str] = {}
-        if self.output_columns:
-            effective_output_columns.update(self.output_columns)
+        # Build final mapping including inferred pairs
+        mapping = (self.output_columns or {}).copy()
+        for feat in list(feature_series.keys()):
+            if feat.startswith(("sin_", "cos_")):
+                mate = ("cos_" if "sin_" in feat else "sin_") + feat[4:]
+                if feat in mapping and mate not in mapping:
+                    mapping[mate] = (
+                        mapping[feat].replace("sin", "cos", 1)
+                        if "sin" in mapping[feat]
+                        else mapping[feat].replace("cos", "sin", 1)
+                    )
 
-            def _infer_pair(missing: str, existing: str) -> None:
-                """Infer the missing SIN/COS mate name by swapping prefix."""
-                existing_out = effective_output_columns.get(existing)
-                if existing_out and missing not in effective_output_columns:
-                    if "sin" in existing_out:
-                        effective_output_columns[missing] = existing_out.replace(
-                            "sin", "cos", 1
-                        )
-                    elif "cos" in existing_out:
-                        effective_output_columns[missing] = existing_out.replace(
-                            "cos", "sin", 1
-                        )
+        # Final column assignment
+        for name, data in feature_series.items():
+            final_name = mapping.get(name, f"{prefix}{name}")
+            df[final_name] = data
 
-            # Iterate pairs to infer missing output names
-            for feat in list(feature_series.keys()):
-                if feat.startswith("sin_"):
-                    mate = "cos_" + feat[4:]
-                    _infer_pair(mate, feat)
-                elif feat.startswith("cos_"):
-                    mate = "sin_" + feat[4:]
-                    _infer_pair(mate, feat)
-
-        # Assign extracted features to the DataFrame
-        for feature_name, series_values in feature_series.items():
-            if feature_name in effective_output_columns:
-                new_col_name = effective_output_columns[feature_name]
-            else:
-                new_col_name = f"{prefix}{feature_name}"
-            result[new_col_name] = series_values
-
-        return result
+        return df
 
     def info(self) -> None:
-        print(f"  Recommendation: {self.rec_type.name}")
+        """Displays a summary of which features will be extracted and their naming scheme."""
+        # Narrow the type to list[str] by checking for existence of .name
+        active_props: list[str] = [
+            p.name
+            for p in DatetimeProperty
+            if p in self.properties and p.name is not None
+        ]
+
+        print(f"  Recommendation: FEATURE_EXTRACTION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Column: '{self.column_name}'")
 
-        # List the properties to extract
-        property_names = []
-        for prop in DatetimeProperty:
-            if prop in self.properties:
-                property_names.append(prop.name)
+        features_str = ", ".join(active_props) if active_props else "None"
+        print(f"    Features: {features_str}")
 
-        if property_names:
-            print(f"    Features: {', '.join(property_names)}")
-
-        # Show the output prefix
         prefix = self.output_prefix if self.output_prefix else f"{self.column_name}_"
         print(f"    Output prefix: '{prefix}'")
 
-        # Show output columns mapping if present
         if self.output_columns:
             print(f"    Output columns: {self.output_columns}")
 
 
 @dataclass
 class DatetimeDurationRecommendation(Recommendation):
-    """Recommendation to calculate duration between two datetime columns.
+    """
+    Recommendation to calculate the elapsed time between two datetime columns.
 
-    Creates a new column representing the time duration between two datetime columns,
-    with configurable time units (seconds, minutes, hours, days).
-    All attributes are editable by the user before applying the recommendation.
+    This creates a numeric feature representing the duration (delta) between
+    a start and end point. This is useful for calculating "Time to Resolution,"
+    "Shipping Duration," or "Age."
+
+    Attributes:
+        start_column: The 'from' datetime column.
+        end_column: The 'to' datetime column.
+        unit: The scale of the resulting number ('seconds', 'minutes', 'hours', 'days').
+        output_column: The name of the new feature. Auto-generated if not provided.
     """
 
     @property
@@ -1595,22 +1646,15 @@ class DatetimeDurationRecommendation(Recommendation):
         return RecommendationType.FEATURE_EXTRACTION
 
     start_column: str = ""
-    """Name of the column representing the start time"""
-
     end_column: str = ""
-    """Name of the column representing the end time"""
-
     unit: str = "minutes"
-    """Time unit for the duration: 'seconds', 'minutes', 'hours', or 'days'"""
-
     output_column: str | None = None
-    """Name of the output column. If None, auto-generated from component columns"""
 
     @classmethod
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "DatetimeDurationRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """Retrieve and validate a recommendation of this type from the manager."""
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1621,82 +1665,66 @@ class DatetimeDurationRecommendation(Recommendation):
         return rec
 
     def __post_init__(self):
+        """Generates a default output name and locks the recommendation state."""
         if not self.output_column:
             self.output_column = f"{self.start_column}_{self.end_column}_{self.unit}"
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate the duration between two datetime columns.
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame with new duration column added
         """
-        result = df
-        delta: pd.Series = cast(
-            pd.Series, result[self.end_column] - result[self.start_column]
-        )
+        Subtracts the start column from the end column and converts to the target unit.
 
-        # Convert timedelta to total seconds using numpy conversion
-        total_sec = cast(
-            pd.Series, pd.Series(delta.values.astype("timedelta64[s]").astype(float))
-        )
+        Missing values in either source column will result in NaN in the output.
+        """
+        if self.start_column not in df.columns or self.end_column not in df.columns:
+            # We return the original df or could raise an error depending on
+            # your pipeline's error-handling philosophy.
+            return df
 
-        # Scale the duration based on user preference
+        # Calculate the raw timedelta
+        delta = df[self.end_column] - df[self.start_column]
+
+        # Use the pandas .dt accessor for clean, vectorized total seconds
+        # This avoids manual numpy casting and is very readable.
+        total_sec = delta.dt.total_seconds()
+
+        # Scale based on unit
         if self.unit == "seconds":
-            result[self.output_column] = total_sec
+            df[self.output_column] = total_sec
         elif self.unit == "hours":
-            result[self.output_column] = total_sec / 3600
+            df[self.output_column] = total_sec / 3600
         elif self.unit == "days":
-            result[self.output_column] = total_sec / 86400
-        else:  # Default to minutes
-            result[self.output_column] = total_sec / 60
+            df[self.output_column] = total_sec / 86400
+        else:  # minutes
+            df[self.output_column] = total_sec / 60
 
-        return result
+        return df
 
     def info(self) -> None:
-        """Display recommendation information."""
+        """Prints the duration calculation details."""
         print(f"  Recommendation: DATETIME_DURATION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
             print(f"    Source: User Hint")
-        print(f"    Start column: '{self.start_column}'")
-        print(f"    End column: '{self.end_column}'")
-        print(f"    Output column: '{self.output_column}'")
-        print(f"    Unit: {self.unit}")
+        print(f"    Calculation: '{self.end_column}' - '{self.start_column}'")
+        print(f"    Output Column: '{self.output_column}'")
+        print(f"    Result Unit: {self.unit}")
 
 
 @dataclass
 class ColumnHint:
-    """User-provided hint to guide recommendation generation for a column.
+    """
+    User-provided metadata to override or guide the recommendation engine.
 
-    Factory methods:
-    - datetime(): logical_type=ColumnHintType.DATETIME, optional datetime_format, datetime_features, output_names mapping
-    - financial(): logical_type=ColumnHintType.FINANCIAL, optional floor/ceiling numeric bounds
-    - categorical(): logical_type=ColumnHintType.CATEGORICAL
-    - numeric(): logical_type=ColumnHintType.NUMERIC, optional floor/ceiling numeric bounds
-            plus numeric-specific controls: `convert_to_int` and `decimal_places`
-    - aggregate(): logical_type=ColumnHintType.AGGREGATE, agg_columns list and agg_op string, optional output_names
-    - ignore(): marks a column to be left as-is, silencing warnings
-    - drop(): generates a recommendation to remove this column entirely
+    Instead of relying solely on automated inference, users can provide a `ColumnHint`
+    to specify the 'logical type' of a column and set constraints like rounding,
+    bounds, or specific feature extraction needs.
 
-    Attributes:
-    - logical_type: ColumnHintType | None
-    - floor: Optional[float]
-    - ceiling: Optional[float]
-    - datetime_format: Optional[str]
-    - datetime_features: Optional[list[DatetimeProperty]]
-    - output_names: Optional[dict[str, str]]
-    - agg_columns: Optional[list[str]]
-    - agg_op: Optional[str]  # e.g., 'sum', 'mean', 'min', 'max'
-    - convert_to_int: Optional[bool] (for numeric hints; force int conversion)
-    - decimal_places: Optional[int] (for numeric/financial/aggregate hints; float precision, can be negative)
-    - is_ignored: bool (internal flag for ignore() hint)
-    - should_drop: bool (internal flag for drop() hint)
+    Note:
+        It is highly recommended to use the provided factory methods (e.g., `.financial()`,
+        `.datetime()`) rather than instantiating this class directly.
     """
 
     logical_type: ColumnHintType | None = None
@@ -1710,15 +1738,10 @@ class ColumnHint:
     convert_to_int: bool | None = None
     decimal_places: int | None = None
     rounding_mode: RoundingMode | None = None
-    """Rounding mode for decimal operations (NEAREST, BANKERS, UP, DOWN)"""
     scale_factor: float | None = None
-    """Scale factor to apply before rounding (e.g., 1/1024 to convert MB to GB)"""
     lat_bounds: tuple[float, float] | None = None
-    """Latitude bounds (min, max) for geospatial columns"""
     lon_bounds: tuple[float, float] | None = None
-    """Longitude bounds (min, max) for geospatial columns"""
     unit: str | None = None
-    """Unit of measurement for distance columns (e.g., 'miles', 'kilometers')"""
     is_ignored: bool = False
     should_drop: bool = False
 
@@ -1729,6 +1752,7 @@ class ColumnHint:
         datetime_features: list[DatetimeProperty] | None = None,
         output_names: dict[str, str] | None = None,
     ) -> "ColumnHint":
+        """Hint that a column should be treated as a Datetime."""
         return cls(
             logical_type=ColumnHintType.DATETIME,
             datetime_format=datetime_format,
@@ -1745,6 +1769,7 @@ class ColumnHint:
         rounding_mode: RoundingMode = RoundingMode.NEAREST,
         scale_factor: float | None = None,
     ) -> "ColumnHint":
+        """Hint for currency or financial data, defaulting to 2 decimal places."""
         return cls(
             logical_type=ColumnHintType.FINANCIAL,
             floor=floor,
@@ -1756,6 +1781,7 @@ class ColumnHint:
 
     @classmethod
     def categorical(cls, output_names: dict[str, str] | None = None) -> "ColumnHint":
+        """Hint that a column is categorical (e.g., for encoding purposes)."""
         return cls(logical_type=ColumnHintType.CATEGORICAL, output_names=output_names)
 
     @classmethod
@@ -1769,6 +1795,7 @@ class ColumnHint:
         rounding_mode: RoundingMode = RoundingMode.NEAREST,
         scale_factor: float | None = None,
     ) -> "ColumnHint":
+        """Hint for general numeric data with optional bounds and precision controls."""
         return cls(
             logical_type=ColumnHintType.NUMERIC,
             floor=floor,
@@ -1789,22 +1816,22 @@ class ColumnHint:
         rounding_mode: RoundingMode = RoundingMode.NEAREST,
         scale_factor: float | None = None,
     ) -> "ColumnHint":
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_columns = []
-        for col in agg_columns:
-            if col not in seen:
-                seen.add(col)
-                unique_columns.append(col)
+        """
+        Hint to generate an aggregate feature (e.g., sum of multiple columns).
 
-        # Warn if duplicates were found
+        Automatically removes duplicate source columns while preserving order.
+        """
+        seen = set()
+        unique_columns = [
+            col for col in agg_columns if not (col in seen or seen.add(col))
+        ]
+
         if len(unique_columns) != len(agg_columns):
-            duplicates = [col for col in agg_columns if agg_columns.count(col) > 1]
             import warnings
 
             warnings.warn(
-                f"Duplicate columns found in aggregate hint: {set(duplicates)}. "
-                f"Duplicates have been removed.",
+                f"Duplicate columns removed from aggregate hint: "
+                f"{[c for c in agg_columns if agg_columns.count(c) > 1]}",
                 UserWarning,
             )
 
@@ -1820,17 +1847,13 @@ class ColumnHint:
 
     @classmethod
     def ignore(cls) -> "ColumnHint":
-        """Marks a column to be left as-is, silencing warnings."""
-        hint = cls()
-        hint.is_ignored = True
-        return hint
+        """Marks a column to be completely bypassed by the recommendation engine."""
+        return cls(is_ignored=True)
 
     @classmethod
     def drop(cls) -> "ColumnHint":
-        """Generates a recommendation to remove this column entirely."""
-        hint = cls()
-        hint.should_drop = True
-        return hint
+        """Forces the generation of a 'DropColumn' recommendation."""
+        return cls(should_drop=True)
 
     @classmethod
     def geospatial(
@@ -1838,19 +1861,12 @@ class ColumnHint:
         latitude_bounds: tuple[float, float] | None = None,
         longitude_bounds: tuple[float, float] | None = None,
     ) -> "ColumnHint":
-        """Hint for latitude/longitude columns.
-
-        Args:
-            latitude_bounds: Optional tuple of (min_lat, max_lat) for constraint validation.
-            longitude_bounds: Optional tuple of (min_lon, max_lon) for constraint validation.
-
-        Returns:
-            ColumnHint configured for geospatial data.
-        """
-        hint = cls(logical_type=ColumnHintType.GEOSPATIAL)
-        hint.lat_bounds = latitude_bounds
-        hint.lon_bounds = longitude_bounds
-        return hint
+        """Hint for GPS/Geospatial coordinates."""
+        return cls(
+            logical_type=ColumnHintType.GEOSPATIAL,
+            lat_bounds=latitude_bounds,
+            lon_bounds=longitude_bounds,
+        )
 
     @classmethod
     def distance(
@@ -1859,29 +1875,33 @@ class ColumnHint:
         floor: float | None = None,
         ceiling: float | None = None,
     ) -> "ColumnHint":
-        """Hint for distance-based columns.
-
-        Args:
-            unit: Unit of measurement (e.g., 'miles', 'kilometers'). Default 'miles'.
-            floor: Optional minimum distance bound.
-            ceiling: Optional maximum distance bound.
-
-        Returns:
-            ColumnHint configured for distance data.
-        """
-        hint = cls(logical_type=ColumnHintType.DISTANCE)
-        hint.unit = unit
-        hint.floor = floor
-        hint.ceiling = ceiling
-        return hint
+        """Hint for distance measurements (e.g., 'radius' or 'length')."""
+        return cls(
+            logical_type=ColumnHintType.DISTANCE,
+            unit=unit,
+            floor=floor,
+            ceiling=ceiling,
+        )
 
 
 @dataclass
 class AggregationRecommendation(Recommendation):
-    """Aggregate multiple columns into a new feature or validate an existing total.
+    """
+    Recommendation to aggregate multiple source columns or validate an existing total.
 
-    Supported operations: sum, mean, min, max.
-    If the output column already exists, validation is performed and mismatches are counted.
+    This class supports horizontal (row-wise) operations like sum, mean, min, and max.
+    If the `output_column` already exists in the DataFrame, this recommendation
+    acts as a validator, identifying rows where the stored total doesn't match
+    the computed total.
+
+    Attributes:
+        agg_columns: The list of columns to aggregate.
+        agg_op: The operation ('sum', 'mean', 'min', 'max').
+        output_column: The target column name for the result or validation check.
+        validation_mismatch_count: Count of rows where computed != existing values.
+        decimal_places: Precision for rounding (supports negative for rounding to tens/hundreds).
+        rounding_mode: The strategy used for decimals (e.g., BANKERS, UP, DOWN).
+        scale_factor: A multiplier applied post-aggregation but pre-rounding.
     """
 
     @property
@@ -1893,109 +1913,123 @@ class AggregationRecommendation(Recommendation):
     output_column: str = ""
     validation_mismatch_count: int = 0
     decimal_places: int | None = None
-    """Optional decimal places for rounding after aggregation (can be negative)"""
     rounding_mode: RoundingMode = RoundingMode.NEAREST
-    """Rounding mode for decimal operations (default: NEAREST)"""
     scale_factor: float | None = None
-    """Scale factor to apply before rounding (e.g., 1/1024 to convert MB to GB)"""
 
     def __post_init__(self):
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def _aggregate(self, df: pd.DataFrame) -> pd.Series:
-        if self.agg_op == "sum":
-            return df[self.agg_columns].sum(axis=1)
-        elif self.agg_op == "mean":
-            return df[self.agg_columns].mean(axis=1)
-        elif self.agg_op == "min":
-            return df[self.agg_columns].min(axis=1)
-        elif self.agg_op == "max":
-            return df[self.agg_columns].max(axis=1)
-        else:
-            raise ValueError(f"Unsupported agg_op: {self.agg_op}")
+        """Performs the row-wise math operation across the specified columns."""
+        # Using the mapping approach is cleaner than an if/else chain
+        op_map = {
+            "sum": df[self.agg_columns].sum,
+            "mean": df[self.agg_columns].mean,
+            "min": df[self.agg_columns].min,
+            "max": df[self.agg_columns].max,
+        }
+
+        if self.agg_op not in op_map:
+            raise ValueError(f"Unsupported aggregation operation: {self.agg_op}")
+
+        return op_map[self.agg_op](axis=1)
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        result = df
-        computed = self._aggregate(result)
+        """
+        Executes aggregation, scaling, and rounding.
 
-        # Apply scale factor if specified
+        Updates the mismatch count if the output column already exists;
+        otherwise, creates the new column.
+        """
+        computed = self._aggregate(df)
+
         if self.scale_factor is not None:
-            computed = computed * self.scale_factor
+            computed *= self.scale_factor
 
-        # Apply rounding if decimal_places is specified (after aggregation and scaling)
         if self.decimal_places is not None:
             factor = 10**self.decimal_places
-
             if self.rounding_mode == RoundingMode.BANKERS:
-                # NumPy's round is "round to nearest even"
                 computed = np.round(computed * factor) / factor
             elif self.rounding_mode == RoundingMode.UP:
                 computed = np.ceil(computed * factor) / factor
             elif self.rounding_mode == RoundingMode.DOWN:
                 computed = np.floor(computed * factor) / factor
-            else:  # NEAREST (Standard half-up)
-                # Use a small epsilon to ensure .5 rounds up correctly
+            else:  # NEAREST (Half-up)
                 computed = np.floor(computed * factor + 0.5) / factor
 
-        if self.output_column in result.columns:
-            # Validate existing total
-            diff = result[self.output_column] - computed
+        if self.output_column in df.columns:
+            # Data Validation Mode
+            # Fillna(0) ensures we don't count aligned NaNs as mismatches
+            diff = df[self.output_column] - computed
             self.validation_mismatch_count = int(diff.fillna(0).ne(0).sum())
-            # Do not overwrite existing column by default
         else:
-            result[self.output_column] = computed
+            # Feature Creation Mode
+            df[self.output_column] = computed
 
-        return result
+        return df
 
     def info(self) -> None:
-        print(f"  Recommendation: {self.rec_type.name}")
+        """Prints aggregation summary, including any validation discrepancies found."""
+        print(f"  Recommendation: FEATURE_AGGREGATION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
             print(f"    Source: User Hint")
-        print(f"    Column: '{self.column_name}'")
-        print(f"    Agg op: {self.agg_op}")
-        print(f"    Source columns: {', '.join(self.agg_columns)}")
-        print(f"    Output column: {self.output_column}")
+        print(
+            f"    Operation: {self.agg_op.upper()} of {len(self.agg_columns)} columns"
+        )
+        print(f"    Target Column: '{self.output_column}'")
+
         if self.decimal_places is not None:
-            print(f"    Decimal places: {self.decimal_places}")
-        if self.validation_mismatch_count:
-            print(f"    Validation mismatches: {self.validation_mismatch_count}")
+            print(
+                f"    Rounding: {self.decimal_places} places ({self.rounding_mode.name})"
+            )
+
+        if self.validation_mismatch_count > 0:
+            print(
+                f"    [!] Validation Warning: {self.validation_mismatch_count} mismatches detected"
+            )
 
 
 class RecommendationManager:
     """
-    Manages a pipeline of recommendations with logical insertion and coordinated application.
+    Orchestrates a pipeline of data transformation recommendations.
 
-    This class serves as a repository for recommendations, enabling:
-    - Logical insertion of recommendations after specific targets (by ID)
-    - Validation before applying to ensure no column is dropped before it's used
-    - Coordinated execution with automated cleanup of original columns
+    The Manager acts as a central repository and execution engine. It ensures
+    that data preparation steps occur in a logically sound order (e.g.,
+    imputing missing values before performing feature interaction) and
+    provides global configuration for automated detection heuristics.
+
+    Attributes:
+        EXECUTION_PRIORITY (dict): A mapping of RecommendationTypes to their
+            relative execution order. Lower values indicate earlier execution.
+        DEFAULT_CONFIG (dict): Baseline thresholds for automated heuristics,
+            including categorical cardinality and null-drop limits.
+        default_date_format (str): The preferred format used for datetime
+            inference and conversion (defaults to 'ISO8601').
     """
 
-    # Execution priority map for recommendation types
-    # Lower numbers execute first; defines the logical order of data preparation
+    # Execution priority map: Defines the "Gravity" of the pipeline
     EXECUTION_PRIORITY: dict[RecommendationType, int] = {
-        # Priority 1: Remove non-informative data that shouldn't be processed
+        # 1: Structural cleanup
         RecommendationType.NON_INFORMATIVE: 1,
-        # Priority 2: Clean outliers before imputing missing values
-        # This ensures component columns are cleaned before aggregation
+        # 2: Value-level cleaning
         RecommendationType.OUTLIER_HANDLING: 2,
-        # Priority 3: Convert numeric types for vectorized operations
+        # 3: Foundational casting
         RecommendationType.DATETIME_CONVERSION: 3,
         RecommendationType.INT_CONVERSION: 3,
-        # Priority 4: Impute missing values so downstream operations don't break
+        RecommendationType.FLOAT_CONVERSION: 3,
+        # 4: Data completion
         RecommendationType.MISSING_VALUES: 4,
         RecommendationType.VALUE_REPLACEMENT: 4,
-        # Priority 5: Convert to categorical dtype after numeric conversions
+        # 5: Optimization
         RecommendationType.CATEGORICAL_CONVERSION: 5,
-        # Priority 6: Extract new features from converted types
-        # Aggregation runs here to ensure component columns are cleaned first
+        # 6: Engineering / Extraction
         RecommendationType.FEATURE_EXTRACTION: 6,
         RecommendationType.FEATURE_INTERACTION: 6,
         RecommendationType.FEATURE_AGGREGATION: 6,
-        # Priority 7: Optimize data types and handle edge cases
+        # 7: ML readiness & final refinements
         RecommendationType.ENCODING: 7,
         RecommendationType.DECIMAL_PRECISION_OPTIMIZATION: 7,
         RecommendationType.BOOLEAN_CLASSIFICATION: 7,
@@ -2004,93 +2038,117 @@ class RecommendationManager:
         RecommendationType.CLASS_IMBALANCE: 7,
     }
 
-    def __init__(self, recommendations: list[Recommendation] | None = None):
-        """
-        Initialize the RecommendationManager.
+    # Baseline thresholds for automated heuristics
+    DEFAULT_CONFIG: dict[str, Any] = {
+        "categorical_threshold": 0.05,  # Unique values / Total rows
+        "max_drop_threshold": 0.90,  # Null ratio to trigger a drop
+        "outlier_threshold": 0.10,  # Max % of outliers to allow clipping
+        "verbose": True,
+    }
 
-        Args:
-            recommendations: Optional list of Recommendation objects to initialize with.
-                           If None, starts with empty pipeline.
+    def __init__(
+        self,
+        recommendations: list[Recommendation] | None = None,
+        default_date_format: str = "ISO8601",
+    ):
+        """
+        Initializes the RecommendationManager.
+
+        Parameters
+        ----------
+        recommendations : list of Recommendation, optional
+            A starting set of Recommendation objects to populate the pipeline.
+            If None, initializes with an empty list.
+        default_date_format : str, default "ISO8601"
+            The format string or parsing strategy used by datetime workers
+            when inferring or converting timestamp columns.
         """
         self._pipeline: list[Recommendation] = recommendations or []
-        # Execution summary warnings collected during generation
         self._summary_warnings: list[str] = []
+        # Store user-provided hints indexed by column name
+        self._column_hints: dict[str, ColumnHint] = {}
+        self.default_date_format = default_date_format
 
-    def add(
-        self, recommendation: Union[Recommendation, Iterable[Recommendation]]
-    ) -> None:
-        # 1. ALWAYS check for the list/container first.
-        # This prevents a list of recommendations from being treated as one object.
-        if isinstance(recommendation, (list, tuple)):
-            self._pipeline.extend(recommendation)
+    def add(self, recommendation: Recommendation | Iterable[Recommendation]) -> None:
+        """
+        Adds one or more recommendations to the end of the pipeline.
 
-        # 2. Then check for the single object
-        elif isinstance(recommendation, Recommendation):
+        Parameters
+        ----------
+        recommendation : Recommendation or iterable of Recommendation
+            A single Recommendation instance or a collection of them to be
+            appended to the existing pipeline.
+
+        Raises
+        ------
+        TypeError
+            If the provided input is not a Recommendation instance or a
+            valid iterable of Recommendations.
+        """
+        if isinstance(recommendation, Recommendation):
             self._pipeline.append(recommendation)
-
-        # 3. Last resort: other iterables (but NOT the object itself)
         elif isinstance(recommendation, Iterable) and not isinstance(
             recommendation, (str, bytes)
         ):
             self._pipeline.extend(recommendation)
+        else:
+            raise TypeError(
+                "Expected a Recommendation or an Iterable of Recommendations."
+            )
 
     def add_after(self, target_id: str, new_rec: Recommendation) -> None:
         """
-        Logically insert a recommendation after a target recommendation by ID.
+        Inserts a recommendation immediately following a specific recommendation ID.
 
-        This enables users to insert recommendations without needing to know
-        the exact index in the pipeline.
+        Parameters
+        ----------
+        target_id : str
+            The unique ID of the existing recommendation to use as an anchor.
+        new_rec : Recommendation
+            The new recommendation instance to be inserted into the pipeline.
 
-        Args:
-            target_id: The ID of the recommendation after which to insert
-            new_rec: The Recommendation object to insert
-
-        Raises:
-            ValueError: If target_id is not found in the pipeline
+        Raises
+        ------
+        ValueError
+            If the target_id does not exist within the current pipeline.
         """
-        # Find the index of the target recommendation
-        target_index = None
-        for i, rec in enumerate(self._pipeline):
-            if rec.id == target_id:
-                target_index = i
-                break
-
-        if target_index is None:
-            raise ValueError(
-                f"Target recommendation with ID '{target_id}' not found in pipeline"
+        # Find index using a generator expression for efficiency
+        try:
+            target_index = next(
+                i for i, rec in enumerate(self._pipeline) if rec.id == target_id
             )
+        except StopIteration:
+            raise ValueError(f"Target recommendation ID '{target_id}' not found.")
 
-        # Insert after the target
         self._pipeline.insert(target_index + 1, new_rec)
 
     def _get_sorted_pipeline(self) -> list[Recommendation]:
         """
-        Sort recommendations by execution priority, then by column name.
+        Retrieves the pipeline sorted by execution priority and column identity.
 
-        Returns:
-            List of recommendations sorted by:
-            1. Execution priority (lower numbers execute first)
-            2. Column name (alphabetically, for consistent ordering within priority level)
+        The sorting logic follows a two-tier hierarchy:
+        1. Priority: Dictated by `EXECUTION_PRIORITY` (lower values execute first).
+        2. Alphabetical: Within a priority level, columns are sorted by name to
+           ensure deterministic execution.
 
-        Example:
-            All Priority 1 recommendations sorted by column_name, then all Priority 2, etc.
+        Returns
+        -------
+        list of Recommendation
+            A new list containing the Recommendations in their optimal
+            execution order.
+
+        Notes
+        -----
+        Unknown recommendation types are assigned a fallback priority of 999,
+        placing them at the very end of the execution sequence.
         """
-        # Group by priority
-        priority_groups: dict[int, list[Recommendation]] = {}
-        for rec in self._pipeline:
+
+        def sort_key(rec: Recommendation) -> tuple[int, str]:
+            # Priority first, then column_name for deterministic results
             priority = self.EXECUTION_PRIORITY.get(rec.rec_type, 999)
-            if priority not in priority_groups:
-                priority_groups[priority] = []
-            priority_groups[priority].append(rec)
+            return (priority, rec.column_name)
 
-        # Build sorted list: iterate through priorities in order, sort each group by column_name
-        sorted_recs: list[Recommendation] = []
-        for priority in sorted(priority_groups.keys()):
-            sorted_recs.extend(
-                sorted(priority_groups[priority], key=lambda x: x.column_name)
-            )
-
-        return sorted_recs
+        return sorted(self._pipeline, key=sort_key)
 
     def apply(
         self,
@@ -2100,150 +2158,155 @@ class RecommendationManager:
         drop_duplicates: bool = False,
     ) -> pd.DataFrame:
         """
-        Apply all recommendations in sequence with validation and cleanup.
+        Executes the recommendation pipeline on the provided DataFrame.
 
-        The process:
-        1. Validation: Ensures no column is dropped before it's used by later recommendations
-        2. Execution: Iteratively applies each recommendation in order
-        3. Cleanup: Automatically drops original columns that were converted/extracted
+        The application process follows a strict lifecycle:
+        1. Validation: Verifies column existence and dependency safety.
+        2. Preparation: Handles duplicates and memory allocation (copy vs. inplace).
+        3. Execution: Applies recommendations in priority order with dtype safety.
+        4. Cleanup: Removes redundant source columns after successful transformation.
 
-        Args:
-            df: Input DataFrame to process
-            allow_column_overwrite: If False (default), raises an error if any recommendation's
-                output_column already exists in the DataFrame. If True, allows overwriting
-                existing columns, but validates that overwritten columns are not needed by
-                higher-priority recommendations and that dtypes are compatible.
-            inplace: If True, mutate the provided DataFrame directly when possible.
-                Default False keeps previous behavior (works on a copy).
-            drop_duplicates: If True, drop duplicate rows before applying recommendations.
-                Default False leaves the data unchanged.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The source DataFrame to be transformed.
+        allow_column_overwrite : bool, default False
+            If True, permits recommendations to update existing columns,
+            provided the resulting data types remain compatible with the
+            original structure.
+        inplace : bool, default False
+            If True, operates directly on the input DataFrame. If False,
+            operates on a copy.
+        drop_duplicates : bool, default False
+            If True, removes identical rows prior to processing.
 
-        Returns:
-            DataFrame with all recommendations applied and cleaned up
+        Returns
+        -------
+        pd.DataFrame
+            A transformed DataFrame containing all applied features and
+            optimizations.
 
-        Raises:
-            ValueError: If validation fails (column dropped before being used, or column
-                       overwrite conflicts)
+        Raises
+        ------
+        ValueError
+            If the pipeline fails structural validation prior to execution.
+        TypeError
+            If an overwrite results in an incompatible data type.
+        RuntimeError
+            If a specific recommendation fails during the execution phase.
         """
-        # Step 1: Validation - Check for column usage before dropping
+        # 1. Structural Guard: Ensure the pipeline is logically sound
         self._validate_pipeline(df, allow_column_overwrite=allow_column_overwrite)
 
-        # Step 2: Execution - Apply recommendations iteratively in priority order
+        # 2. Preparation
         result = df if inplace else df.copy()
-
-        # Pre-execution
         if drop_duplicates:
             result = result.drop_duplicates()
 
-        columns_to_drop = set()
+        # Track columns slated for removal (e.g., raw strings after conversion)
+        garbage_collector: set[str] = set()
 
-        # Sort recommendations by priority, then by column_name
-        sorted_recs = self._get_sorted_pipeline()
-
-        for rec in sorted_recs:
-            # Skip disabled recommendations
+        # 3. Execution: Priority-ordered application
+        for rec in self._get_sorted_pipeline():
             if not rec.enabled:
                 continue
 
             try:
-                # Capture original dtype if we are about to overwrite
-                output_col: str | None = cast(
-                    str | None, getattr(rec, "output_column", None)
-                )
-                original_dtype = (
-                    result[output_col].dtype
-                    if (output_col and output_col in result.columns)
+                # Capture state for overwrite validation
+                out_col = getattr(rec, "output_column", None)
+                pre_apply_dtype = (
+                    result[out_col].dtype
+                    if (out_col and out_col in result.columns)
                     else None
                 )
 
+                # Perform the transformation
                 result = rec.apply(result)
 
-                # Post-Apply Dtype Enforcement: Validate dtype was not changed during overwrite
-                if original_dtype is not None and allow_column_overwrite and output_col:
-                    if (
-                        output_col in result.columns
-                        and result[output_col].dtype != original_dtype
-                    ):
+                # Dtype Safety Check: Prevent 'Object' columns from becoming 'Int'
+                # via overwrite unexpectedly
+                if pre_apply_dtype is not None and allow_column_overwrite and out_col:
+                    current_dtype = result[out_col].dtype
+                    if current_dtype != pre_apply_dtype:
                         raise TypeError(
-                            f"Overwrite error: Recommendation '{rec.id}' changed '{output_col}' "
-                            f"from {original_dtype} to {result[output_col].dtype}. "
-                            f"Dtypes must remain compatible when overwriting existing columns."
+                            f"Incompatible Overwrite: {rec.id} changed '{out_col}' "
+                            f"from {pre_apply_dtype} to {current_dtype}."
                         )
+
             except Exception as e:
+                # Wrap internal errors with manager-level context
                 raise RuntimeError(
-                    f"Failed to apply recommendation '{rec.id}' "
-                    f"(type={rec.rec_type.name}, column='{rec.column_name}'): {str(e)}"
+                    f"Pipeline Failure: {rec.id} ({rec.rec_type.name}) failed on "
+                    f"column '{rec.column_name}'. Error: {e}"
                 ) from e
 
-            # Track columns that should be cleaned up
-            # (columns that were converted or are no longer needed)
-            if rec.rec_type in (
+            # 4. Cleanup Registration: Flag source columns that are now redundant
+            is_transformative = rec.rec_type in (
                 RecommendationType.DATETIME_CONVERSION,
                 RecommendationType.FEATURE_EXTRACTION,
-            ):
-                columns_to_drop.add(rec.column_name)
-            elif rec.rec_type == RecommendationType.ENCODING:
-                # Original encoded column can be dropped
-                if rec.column_name in result.columns:
-                    columns_to_drop.add(rec.column_name)
+                RecommendationType.ENCODING,
+            )
+            if is_transformative and rec.column_name in result.columns:
+                garbage_collector.add(rec.column_name)
 
-        # Step 3: Cleanup - Drop original columns that were processed
-        columns_to_drop = {col for col in columns_to_drop if col in result.columns}
-        if columns_to_drop:
-            result = result.drop(columns=list(columns_to_drop))
+        # 5. Final Cleanup: Drop source columns if they weren't overwritten
+        if garbage_collector:
+            # We only drop columns that aren't also output columns
+            # (to avoid dropping a column we just updated via overwrite)
+            final_drops = [c for c in garbage_collector if c in result.columns]
+            result.drop(columns=final_drops, inplace=True)
 
         return result
 
     def execution_summary(self) -> None:
         """
-        Display a summary of recommendations in execution order.
+        Prints a structured roadmap of the recommendation pipeline.
 
-        Groups recommendations by priority level and displays them in the order
-        they would be executed, with section headings for each priority level.
+        Recommendations are grouped by their logical execution priority to
+        visualize the transformation lifecycle from data cleaning to feature
+        engineering.
         """
         if not self._pipeline:
-            print("No recommendations in pipeline.")
+            print("\n[!] Pipeline is empty. No recommendations to display.")
             return
 
-        # Get sorted recommendations
+        # 1. Grouping Logic
         sorted_recs = self._get_sorted_pipeline()
-
-        # Group sorted recommendations by priority for display
         priority_groups: dict[int, list[Recommendation]] = {}
-        for rec in sorted_recs:
-            priority = self.EXECUTION_PRIORITY.get(rec.rec_type, 999)
-            if priority not in priority_groups:
-                priority_groups[priority] = []
-            priority_groups[priority].append(rec)
 
-        # Priority descriptions
-        priority_names = {
-            1: "Priority 1: Remove Non-Informative Data",
-            2: "Priority 2: Clean Outliers",
-            3: "Priority 3: Type Conversions",
-            4: "Priority 4: Handle Missing Values & Placeholders",
-            5: "Priority 5: Convert to Categorical",
-            6: "Priority 6: Feature Extraction",
-            7: "Priority 7: Optimization & Edge Cases",
+        for rec in sorted_recs:
+            p = self.EXECUTION_PRIORITY.get(rec.rec_type, 999)
+            priority_groups.setdefault(p, []).append(rec)
+
+        # 2. Section Headers
+        priority_labels = {
+            1: "STAGE 1: Structural Cleanup (Dropping Columns)",
+            2: "STAGE 2: Outlier Mitigation & Robustness",
+            3: "STAGE 3: Type Casting & Schema Refinement",
+            4: "STAGE 4: Imputation & Placeholder Handling",
+            5: "STAGE 5: Categorical Optimizations",
+            6: "STAGE 6: Feature Extraction & Engineering",
+            7: "STAGE 7: Final Polishing & Memory Optimization",
         }
 
-        # Display recommendations by priority
-        print("\n" + "=" * 70)
-        print("RECOMMENDATION EXECUTION SUMMARY")
-        print("=" * 70)
+        # 3. Render Summary
+        print("\n" + "═" * 80)
+        print(f"{'DATA PREPARATION STRATEGY':^80}")
+        print("═" * 80)
 
-        for priority in sorted(priority_groups.keys()):
-            print(f"\n{priority_names.get(priority, f'Priority {priority}')}")
-            print("-" * 70)
+        for p_level in sorted(priority_groups.keys()):
+            label = priority_labels.get(p_level, f"STAGE {p_level}: Additional Tasks")
+            print(f"\n● {label}")
+            print("─" * 80)
 
-            for rec in priority_groups[priority]:
-                rec.info()
+            for rec in priority_groups[p_level]:
+                status = "[ACTIVE]" if rec.enabled else "[DISABLED]"
+                print(f"  {status} {rec.column_name:<20} | {rec.description}")
                 if rec.alias:
-                    print(f"    Alias: {rec.alias}")
-                print()
+                    print(f"    └─ Alias: {rec.alias}")
 
-        # Show which columns will be cleaned up during apply()
-        cleanup_cols = {
+        # 4. Cleanup & Resource Management
+        cleanup_targets = {
             r.column_name
             for r in self._pipeline
             if r.rec_type
@@ -2254,282 +2317,211 @@ class RecommendationManager:
             )
         }
 
-        if cleanup_cols:
-            print("\nPost-Execution Cleanup")
-            print("-" * 70)
-            print(
-                f"Action: Automated drop of original source columns: {', '.join(sorted(cleanup_cols))}"
-            )
+        if cleanup_targets:
+            print("\n" + "─" * 80)
+            print(f"RESOURCE MANAGEMENT: Redundant source columns to be purged:")
+            print(f"» {', '.join(sorted(cleanup_targets))}")
 
-        # Display any recorded warnings
+        # 5. Alerts & Warnings
         if self._summary_warnings:
-            print("\nWarnings")
-            print("-" * 70)
-            for w in self._summary_warnings:
-                print(f"! {w}")
+            print("\n" + "!" * 80)
+            print(f"{'CONFIGURATION ALERTS':^80}")
+            print("!" * 80)
+            for warning in self._summary_warnings:
+                print(f" • {warning}")
 
-        print("=" * 70)
+        print("\n" + "═" * 80)
 
     def _validate_pipeline(
         self, df: pd.DataFrame, allow_column_overwrite: bool = False
     ) -> None:
         """
-        Validate the recommendation pipeline to ensure no column is dropped
-        before it's used by later recommendations, and to handle column overwriting.
+        Validates the execution integrity and dependency graph of the current pipeline.
 
-        Only enabled recommendations are considered during validation.
+        Performs a dry-run of the pipeline logic to ensure that all source columns
+        exist, no required data is dropped prematurely, and column overwrites do
+        not create logical "stale data" conflicts for downstream transformations.
 
-        Args:
-            df: Original DataFrame for context
-            allow_column_overwrite: If False, raises error if output_column exists in df.
-                If True, allows overwriting but validates compatibility with pipeline.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The input DataFrame to validate against.
+        allow_column_overwrite : bool, default False
+            If False, raises an error if any recommendation attempts to write to
+            an existing column name.
 
-        Raises:
-            ValueError: If a column is dropped before being used, if a column in
-                       a recommendation doesn't exist, if column overwrite is not allowed,
-                       or if overwritten columns conflict with higher-priority recommendations.
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If a required source column is missing.
+        ValueError
+            If a recommendation depends on a column dropped by a higher-priority task.
+        ValueError
+            If an unauthorized or unsafe column overwrite is detected.
         """
-        # First, check that all columns referenced in enabled recommendations exist in the DataFrame
+        enabled_recs = [r for r in self._pipeline if r.enabled]
         available_columns = set(df.columns)
-        for rec in self._pipeline:
-            # Validate only enabled recommendations
-            if not rec.enabled:
-                continue
 
+        # 1. Verification of Initial Source Existence
+        for rec in enabled_recs:
             if rec.column_name not in available_columns:
                 raise ValueError(
-                    f"Column '{rec.column_name}' referenced in recommendation "
-                    f"(ID: {rec.id}, type={rec.rec_type.name}) does not exist in the DataFrame. "
-                    f"Available columns: {', '.join(sorted(available_columns))}"
+                    f"Missing Source: Column '{rec.column_name}' referenced in {rec.id} "
+                    f"does not exist in the DataFrame."
                 )
 
-        # Track which columns are read and written during pipeline execution
-        # Maps column name to priority level that wrote it
-        written_columns: dict[str, int] = {}
-        read_columns: set[str] = set()  # Columns needed by any recommendation
+        # 2. Sequential Dependency & Overwrite Analysis
+        sorted_recs = self._get_sorted_pipeline()
+        dropped_columns: set[str] = set()
 
-        # First pass: identify all read columns and check for overwrite conflicts
-        for rec in self._pipeline:
-            # Process only enabled recommendations
+        for i, rec in enumerate(sorted_recs):
             if not rec.enabled:
                 continue
 
-            rec_priority = self.EXECUTION_PRIORITY.get(rec.rec_type, 999)
+            # Resolve all input requirements for this recommendation
+            dependencies = {rec.column_name}
+            for attr in ("start_column", "end_column", "agg_columns"):
+                val = getattr(rec, attr, None)
+                if isinstance(val, str):
+                    dependencies.add(val)
+                elif isinstance(val, list):
+                    dependencies.update(val)
 
-            # Track columns this recommendation reads
-            read_columns.add(rec.column_name)
+            # Safety Check: Is the input actually available at this stage?
+            conflict = dependencies.intersection(dropped_columns)
+            if conflict:
+                raise ValueError(
+                    f"Logic Conflict: Recommendation {rec.id} depends on {conflict}, "
+                    f"which was dropped in an earlier priority stage."
+                )
 
-            # Check for output_column conflicts (for recommendations that produce new columns)
-            output_col: str | None = cast(
-                str | None, getattr(rec, "output_column", None)
-            )
-            if output_col:
-                # Rule 1: If allow_column_overwrite=False and column exists, raise error
-                if not allow_column_overwrite and output_col in available_columns:
+            # 3. Overwrite Safety Analysis
+            output_col = getattr(rec, "output_column", None)
+            if output_col and output_col in available_columns:
+                if not allow_column_overwrite:
                     raise ValueError(
-                        f"Conflict: Recommendation '{rec.id}' attempts to write to column "
-                        f"'{output_col}' which already exists in the DataFrame. "
-                        f"Set allow_column_overwrite=True to permit overwriting, or rename the output column."
+                        f"Overwrite Conflict: {rec.id} attempts to update existing "
+                        f"column '{output_col}'. Set allow_column_overwrite=True to permit."
                     )
 
-                # Rule 2: If allow_column_overwrite=True, check for pipeline conflicts
-                if allow_column_overwrite and output_col in available_columns:
-                    # Check if this column is needed by higher-priority recommendations
-                    for other_rec in self._pipeline:
-                        if other_rec is rec:
-                            continue
+                # Lookahead Check: Ensure no later step expects the 'original' version of this column
+                for later_rec in sorted_recs[i + 1 :]:
+                    if not later_rec.enabled:
+                        continue
 
-                        other_priority = self.EXECUTION_PRIORITY.get(
-                            other_rec.rec_type, 999
+                    later_deps = {later_rec.column_name}
+                    for attr in ("start_column", "end_column", "agg_columns"):
+                        l_val = getattr(later_rec, attr, None)
+                        if isinstance(l_val, str):
+                            later_deps.add(l_val)
+                        elif isinstance(l_val, list):
+                            later_deps.update(l_val)
+
+                    if output_col in later_deps:
+                        raise ValueError(
+                            f"Pipeline Break: Cannot overwrite '{output_col}' in {rec.id} "
+                            f"because a later step ({later_rec.id}) requires the original "
+                            f"data for that column."
                         )
 
-                        # Higher priority = lower priority number
-                        if other_priority > rec_priority:
-                            # Check if other_rec reads from this output_column
-                            columns_used_by_other = {other_rec.column_name}
-
-                            # Add start_column and end_column if they exist (for DatetimeDurationRecommendation)
-                            start_col: str | None = cast(
-                                str | None, getattr(other_rec, "start_column", None)
-                            )
-                            end_col: str | None = cast(
-                                str | None, getattr(other_rec, "end_column", None)
-                            )
-
-                            if start_col:
-                                columns_used_by_other.add(start_col)
-                            if end_col:
-                                columns_used_by_other.add(end_col)
-
-                            if output_col in columns_used_by_other:
-                                raise ValueError(
-                                    f"Cannot overwrite '{output_col}' because it is needed for "
-                                    f"recommendation '{other_rec.id}' (type={other_rec.rec_type.name}) "
-                                    f"which has higher priority (priority {other_priority} > {rec_priority})."
-                                )
-
-                # Rule 3: Check if overwritten column is used as input by any later-executing recommendations
-                if output_col in available_columns:
-                    # Get sorted pipeline to check execution order
-                    sorted_recs = self._get_sorted_pipeline()
-                    rec_index = None
-                    for i, r in enumerate(sorted_recs):
-                        if r is rec:
-                            rec_index = i
-                            break
-
-                    if rec_index is not None:
-                        # Check all recommendations that execute after this one
-                        for later_rec in sorted_recs[rec_index + 1 :]:
-                            # Skip disabled recommendations
-                            if not later_rec.enabled:
-                                continue
-
-                            columns_used_by_later = {later_rec.column_name}
-
-                            # Add start_column and end_column if they exist
-                            later_start_col: str | None = cast(
-                                str | None, getattr(later_rec, "start_column", None)
-                            )
-                            later_end_col: str | None = cast(
-                                str | None, getattr(later_rec, "end_column", None)
-                            )
-
-                            if later_start_col:
-                                columns_used_by_later.add(later_start_col)
-                            if later_end_col:
-                                columns_used_by_later.add(later_end_col)
-
-                            if output_col in columns_used_by_later:
-                                raise ValueError(
-                                    f"Cannot overwrite '{output_col}': Recommendation '{rec.id}' would change "
-                                    f"the column that recommendation '{later_rec.id}' (type={later_rec.rec_type.name}) "
-                                    f"depends on as input. This breaks the pipeline logic because '{later_rec.id}' "
-                                    f"would operate on stale/modified data."
-                                )
-
-                    # Rule 4: Check dtype compatibility if column is being overwritten
-                    if output_col in available_columns:
-                        original_dtype = df[output_col].dtype
-                        # This will be validated after apply(), but we should flag it as a consideration
-                        # Store the mapping for later dtype compatibility check if needed
-                        written_columns[output_col] = rec_priority
-
-        # Track which columns are dropped during pipeline execution
-        dropped_columns = set()
-
-        # Second pass: track column lifecycle through the pipeline
-        for i, rec in enumerate(self._pipeline):
-            # Skip disabled recommendations
-            if not rec.enabled:
-                continue
-
-            # Check if this recommendation drops a column
-            if rec.rec_type == RecommendationType.NON_INFORMATIVE:
+            # 4. State Tracking: Update dropped columns for the next iteration
+            is_dropped = rec.rec_type == RecommendationType.NON_INFORMATIVE or (
+                rec.rec_type == RecommendationType.MISSING_VALUES
+                and getattr(rec, "strategy", None) == MissingValueStrategy.DROP_COLUMN
+            )
+            if is_dropped:
                 dropped_columns.add(rec.column_name)
-            elif rec.rec_type == RecommendationType.MISSING_VALUES:
-                # Some strategies drop the column
-                if isinstance(
-                    rec, MissingValuesRecommendation
-                ) and rec.strategy.name in ("DROP_COLUMN",):
-                    dropped_columns.add(rec.column_name)
-
-            # Check if any later recommendation uses a dropped column
-            for later_rec in self._pipeline[i + 1 :]:
-                # Skip disabled recommendations
-                if not later_rec.enabled:
-                    continue
-
-                if later_rec.column_name in dropped_columns:
-                    # Find the recommendation that dropped this column
-                    dropping_rec_id = None
-                    for r in self._pipeline[: i + 1]:
-                        if (
-                            r.rec_type == RecommendationType.NON_INFORMATIVE
-                            and r.column_name == later_rec.column_name
-                        ):
-                            dropping_rec_id = r.id
-                            break
-
-                    error_msg = (
-                        f"Column '{later_rec.column_name}' is dropped by a previous "
-                        f"recommendation"
-                    )
-                    if dropping_rec_id:
-                        error_msg += f" (ID: {dropping_rec_id})"
-                    error_msg += (
-                        f", but is needed by recommendation '{later_rec.id}' "
-                        f"(type={later_rec.rec_type.name})"
-                    )
-                    raise ValueError(error_msg)
 
     def _semantic_similarity(self, col1: str, col2: str) -> float:
         """
-        Calculate semantic similarity between two column names (0 to 1).
+        Calculates a heuristic similarity score between two column names.
 
-        Uses shared prefixes/suffixes and temporal anchor keywords to score similarity.
-        Higher score = more likely to be related datetime columns for duration calculation.
+        This utility identifies potential temporal pairs (e.g., 'start_date' and
+        'end_date') by evaluating linguistic "polarity" and shared naming
+        tokens. It is primarily used by the duration discovery engine to
+        assign confidence scores to identified intervals.
 
-        Args:
-            col1: First column name
-            col2: Second column name
+        Parameters
+        ----------
+        col1 : str
+            The name of the first column to compare.
+        col2 : str
+            The name of the second column to compare.
 
-        Returns:
-            Similarity score between 0 and 1
+        Returns
+        -------
+        float
+            A similarity score ranging from 0.0 (no relation) to 1.0 (perfect match).
+            - 0.9: Opposing temporal anchors (Start/End pairs).
+            - 0.7: Shared temporal context (Both indicate time).
+            - 0.1 - 0.6: Structural token overlap.
         """
-        col1_lower = col1.lower()
-        col2_lower = col2.lower()
+        c1, c2 = col1.lower(), col2.lower()
 
-        # Start indicators: patterns suggesting start of an interval
-        start_indicators = {
+        # Group indicators by their temporal 'polarity'
+        start_terms = {
             "start",
             "open",
             "begin",
             "entry",
             "from",
-            "in",
-            "departure",
-            "arrival",
             "created",
             "opened",
+            "departure",
+            "inception",
         }
-        # End indicators: patterns suggesting end of an interval
-        end_indicators = {
+        end_terms = {
             "end",
             "close",
             "finish",
             "exit",
             "to",
-            "out",
-            "departure",
-            "arrival",
             "completed",
             "closed",
+            "arrival",
+            "termination",
         }
 
-        # Check for temporal anchor keywords
-        col1_has_start = any(indicator in col1_lower for indicator in start_indicators)
-        col1_has_end = any(indicator in col1_lower for indicator in end_indicators)
-        col2_has_start = any(indicator in col2_lower for indicator in start_indicators)
-        col2_has_end = any(indicator in col2_lower for indicator in end_indicators)
+        # Determine if columns contain start or end indicators
+        c1_start = any(t in c1 for t in start_terms)
+        c1_end = any(t in c1 for t in end_terms)
+        c2_start = any(t in c2 for t in start_terms)
+        c2_end = any(t in c2 for t in end_terms)
 
-        # Perfect pairing: one is start, other is end
-        if (col1_has_start and col2_has_end) or (col1_has_end and col2_has_start):
+        # 1. Perfect Pairing: Opposing polarities (e.g., 'start' and 'end')
+        if (c1_start and c2_end) or (c1_end and c2_start):
             return 0.9
 
-        # Both have temporal indicators
-        if (col1_has_start or col1_has_end) and (col2_has_start or col2_has_end):
+        # 2. Strong Temporal Context: Both are time-related but polarity is unclear
+        if (c1_start or c1_end) and (c2_start or c2_end):
             return 0.7
 
-        # Check for shared prefixes (e.g., "event_start" and "event_end")
-        parts1 = col1_lower.replace("_", " ").split()
-        parts2 = col2_lower.replace("_", " ").split()
-        shared_parts = len(set(parts1) & set(parts2))
+        # 3. Structural Similarity: Shared word components
+        # Normalize delimiters to spaces then split into tokens
+        import re
 
-        if shared_parts > 0:
-            max_parts = max(len(parts1), len(parts2))
-            prefix_similarity = shared_parts / max_parts if max_parts > 0 else 0
-            return min(0.6, prefix_similarity)
+        tokens1 = set(re.split(r"[_ \-]", c1))
+        tokens2 = set(re.split(r"[_ \-]", c2))
+
+        # Remove empty strings from potential trailing delimiters
+        tokens1.discard("")
+        tokens2.discard("")
+
+        shared_tokens = tokens1.intersection(tokens2)
+        if shared_tokens:
+            # Calculate Jaccard-like overlap relative to the longest name
+            max_token_count = max(len(tokens1), len(tokens2))
+            token_score = (
+                len(shared_tokens) / max_token_count if max_token_count > 0 else 0
+            )
+
+            # Cap structural similarity at 0.6 to ensure temporal
+            # anchors always take precedence in discovery.
+            return min(0.6, token_score)
 
         return 0.0
 
@@ -2537,151 +2529,934 @@ class RecommendationManager:
         self, df: pd.DataFrame, col_a: str, col_b: str, sample_size: int = 500
     ) -> float:
         """
-        Calculate ratio of positive deltas when subtracting col_a from col_b.
+        Heuristically determines the temporal "arrow" between two columns.
 
-        Args:
-            df: DataFrame to analyze
-            col_a: Column to subtract from (potential start)
-            col_b: Column to subtract (potential end)
-            sample_size: Number of rows to sample
+        Calculates the statistical ratio of rows where `col_b` occurs at or after
+        `col_a`. A high ratio (typically > 0.95) provides strong evidence that
+        `col_a` is the temporal origin and `col_b` is the terminus.
 
-        Returns:
-            Ratio of positive deltas (0 to 1). Values > 0.95 indicate strong "arrow of time"
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the temporal data.
+        col_a : str
+            The name of the potential "start" column.
+        col_b : str
+            The name of the potential "end" column.
+        sample_size : int, default 500
+            The maximum number of non-null rows to evaluate to ensure
+            performance on large datasets.
+
+        Returns
+        -------
+        float
+            The ratio of positive time deltas ranging from 0.0 to 1.0.
+            Returns 0.0 if comparison is impossible or data is empty.
         """
         try:
-            sample = df[[col_a, col_b]].dropna().head(sample_size)
-            if len(sample) < 2:
+            # Efficiency: Sample only necessary columns and drop missing data
+            sample = df[[col_a, col_b]].dropna()
+
+            if sample.empty:
                 return 0.0
 
-            # Calculate deltas
-            deltas = sample[col_b] - sample[col_a]
-            positive_count = (deltas > pd.Timedelta(0)).sum()
-            total_count = len(deltas)
+            if len(sample) > sample_size:
+                sample = sample.sample(n=sample_size, random_state=42)
 
-            return positive_count / total_count if total_count > 0 else 0.0
-        except Exception:
+            # Ensure we are working with datetime objects for subtraction
+            s_a = pd.to_datetime(sample[col_a], errors="coerce")
+            s_b = pd.to_datetime(sample[col_b], errors="coerce")
+
+            # Re-drop any coercion failures (e.g. invalid date strings)
+            valid_mask = s_a.notna() & s_b.notna()
+            if not valid_mask.any():
+                return 0.0
+
+            # Vectorized subtraction: col_b - col_a >= 0
+            is_positive = (s_b[valid_mask] - s_a[valid_mask]) >= pd.Timedelta(0)
+
+            return float(is_positive.mean())
+
+        except (ValueError, TypeError, OverflowError, AttributeError):
+            # Fallback for incompatible types or data overflow
             return 0.0
 
     def _check_reasonable_duration_magnitude(
         self, df: pd.DataFrame, col_a: str, col_b: str, sample_size: int = 500
     ) -> bool:
         """
-        Check if duration between two datetime columns is within reasonable magnitude.
+        Validates if the temporal interval between columns is analytically plausible.
 
-        Avoids pairing unrelated dates (e.g., birth_date and transaction_date).
-        Considers durations within days/weeks/months reasonable, not years apart.
+        This heuristic filters out pairs that are mathematically forward-moving but
+        semantically unrelated (e.g., 'DateOfBirth' vs 'TransactionDate') by
+        verifying that the majority of durations fall within a 10-year window.
 
-        Args:
-            df: DataFrame to analyze
-            col_a: Start column
-            col_b: End column
-            sample_size: Number of rows to sample
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the potential datetime columns.
+        col_a : str
+            The name of the potential "start" column.
+        col_b : str
+            The name of the potential "end" column.
+        sample_size : int, default 500
+            The number of rows to sample to verify magnitude without
+            performance degradation.
 
-        Returns:
-            True if durations are within reasonable range, False otherwise
+        Returns
+        -------
+        bool
+            True if the majority of sampled forward-moving durations are
+            under 10 years; False otherwise.
         """
         try:
-            sample = df[[col_a, col_b]].dropna().head(sample_size)
-            if len(sample) < 2:
+            # Efficiency: Sample only necessary columns and drop missing data
+            sample = df[[col_a, col_b]].dropna()
+
+            if sample.empty:
                 return False
 
-            deltas = sample[col_b] - sample[col_a]
+            if len(sample) > sample_size:
+                sample = sample.sample(n=sample_size, random_state=42)
 
-            # Filter for positive deltas only
-            positive_deltas = deltas[deltas > pd.Timedelta(0)]
-            if len(positive_deltas) == 0:
+            # Ensure we have proper datetime objects for subtraction
+            s_a = pd.to_datetime(sample[col_a], errors="coerce")
+            s_b = pd.to_datetime(sample[col_b], errors="coerce")
+
+            # Align timezones if one is aware and the other is naive
+            if s_a.dt.tz is not None and s_b.dt.tz is None:
+                s_a = s_a.dt.tz_localize(None)
+            elif s_b.dt.tz is not None and s_a.dt.tz is None:
+                s_b = s_b.dt.tz_localize(None)
+
+            deltas = s_b - s_a
+
+            # We only care about the magnitude of forward-moving events
+            forward_deltas = deltas[deltas >= pd.Timedelta(0)]
+            if forward_deltas.empty:
                 return False
 
-            # Check if most durations are within reasonable range (< 10 years)
-            max_duration = pd.Timedelta(days=3650)  # ~10 years
-            reasonable_count = (positive_deltas <= max_duration).sum()
+            # 10-year window: 365 days * 10 + 2 leap days
+            max_duration = pd.Timedelta(days=3652)
 
-            # At least 50% of durations should be reasonable
-            return reasonable_count / len(positive_deltas) > 0.5
-        except Exception:
+            # Check if the majority (>50%) of data falls in this window
+            is_within_limit = forward_deltas <= max_duration
+
+            return bool(is_within_limit.mean() > 0.5)
+
+        except (ValueError, TypeError, OverflowError, AttributeError):
+            # If the calculation is impossible, we assume no reasonable relationship
             return False
 
     def _generate_duration_column_name(self, col_a: str, col_b: str) -> str:
         """
-        Generate a descriptive name for a duration column.
+        Derives a semantic and sanitized name for a new duration feature.
 
-        Tries to use semantic anchors first, falls back to generic pattern.
-        Examples: event_start + event_end -> event_duration
+        Uses a tiered naming strategy:
+        1. Shared Context: Extracts common prefixes/tokens between columns.
+        2. Anchor Stripping: Removes temporal keywords to find the subject.
+        3. Concatenation: Joins cleaned names as a descriptive fallback.
 
-        Args:
-            col_a: Start column name
-            col_b: End column name
+        Parameters
+        ----------
+        col_a : str
+            The name of the start column.
+        col_b : str
+            The name of the end column.
 
-        Returns:
-            Suggested duration column name
+        Returns
+        -------
+        str
+            A lower-case, snake_case string representing the duration column.
+
+        Examples
+        --------
+        >>> manager._generate_duration_column_name('session_start', 'session_end')
+        'session_duration'
+        >>> manager._generate_duration_column_name('created_at', 'resolved_at')
+        'created_at_duration'
         """
-        col_a_lower = col_a.lower()
-        col_b_lower = col_b.lower()
+        a_low, b_low = col_a.lower(), col_b.lower()
 
-        # Extract common prefix
-        parts_a = col_a_lower.replace("_", " ").split()
-        parts_b = col_b_lower.replace("_", " ").split()
-        shared_parts = list(set(parts_a) & set(parts_b))
+        # 1. Shared Sequence Extraction
+        # Split by underscore or space to find linguistic components
+        import re
 
-        # If there's a shared prefix, use it with "_duration" suffix
-        if shared_parts:
-            # Use up to 2 shared parts
-            common_prefix = "_".join(sorted(shared_parts)[:2])
-            return f"{common_prefix}_duration"
+        parts_a = re.split(r"[_ ]", a_low)
+        parts_b = re.split(r"[_ ]", b_low)
 
-        # Check for temporal indicators and build descriptive name
-        temporal_keywords = {"start", "open", "begin", "end", "close", "finish"}
-        for keyword in temporal_keywords:
-            if keyword in col_a_lower or keyword in col_b_lower:
-                base = col_a_lower.replace(keyword, "").replace("_", " ").strip()
+        # Look for tokens that appear in both, maintaining relative order
+        shared_tokens = [p for p in parts_a if p in parts_b and p.strip()]
+
+        if shared_tokens:
+            # Use up to the first two shared tokens to keep names concise
+            base = "_".join(shared_tokens[:2])
+            return f"{base}_duration"
+
+        # 2. Temporal Anchor Stripping
+        # If no shared tokens, try to strip the "time" indicator from the first match
+        anchors = {
+            "start",
+            "begin",
+            "open",
+            "from",
+            "end",
+            "finish",
+            "close",
+            "to",
+            "at",
+        }
+        for col in [a_low, b_low]:
+            # Use regex to replace anchors as whole words or delimited parts
+            # This avoids mangling words like 'startle' or 'attend'
+            for anchor in anchors:
+                pattern = rf"\b{anchor}\b|(?<=[_ ]){anchor}(?=[_ ])"
+                base = re.sub(pattern, "", col).strip("_ ").replace(" ", "_")
                 if base:
                     return f"{base}_duration"
 
-        # Fallback: combine both column names
-        return f"{col_a_lower}_{col_b_lower}_duration"
+        # 3. Fallback: Structural Concatenation
+        # Final safety net: join both names cleanly
+        name_a = a_low.replace(" ", "_").strip("_")
+        name_b = b_low.replace(" ", "_").strip("_")
+        return f"{name_a}_{name_b}_duration"
 
     def _identify_datetime_columns(
         self, df: pd.DataFrame, existing_datetime_cols: set[str] | None = None
     ) -> set[str]:
         """
-        Identify all columns that are or will be datetime type.
+        Aggregates all current and pending datetime columns within the pipeline.
 
-        Includes columns with existing datetime dtype and those with
-        DATETIME_CONVERSION recommendations in the pipeline.
+        This utility provides a unified view of temporal data by combining columns
+        that are natively datetime-typed with those slated for conversion via
+        pending 'DATETIME_CONVERSION' recommendations. This look-ahead capability
+        is essential for cross-column discovery (e.g., duration calculation)
+        on raw string data.
 
-        Args:
-            df: DataFrame to analyze
-            existing_datetime_cols: Optional set of columns already known to be datetime.
-                If provided, skips checking these columns to avoid redundant type checks.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame being analyzed.
+        existing_datetime_cols : set of str, optional
+            A pre-calculated set of native datetime columns to avoid
+            redundant type-checking.
 
-        Returns:
-            Set of column names that are/will be datetime
+        Returns
+        -------
+        set of str
+            A set containing the names of all columns that are, or will
+            become, datetime objects.
         """
-        datetime_cols = set()
-
-        # 1. Already datetime dtype
+        # 1. Gather native datetime columns
         if existing_datetime_cols is not None:
-            # Use pre-identified datetime columns to avoid redundant type checks
-            datetime_cols.update(existing_datetime_cols)
+            datetime_cols = set(existing_datetime_cols)
         else:
-            # Check all columns (used when called outside generate_recommendations)
-            for col in df.columns:
-                if pd.api.types.is_datetime64_any_dtype(df[col]):
-                    datetime_cols.add(col)
+            # Fallback to vectorized check if no cache is provided
+            datetime_cols = {
+                col
+                for col in df.columns
+                if pd.api.types.is_datetime64_any_dtype(df[col])
+            }
 
-        # 2. Will be datetime after DATETIME_CONVERSION recommendations
-        for rec in self._pipeline:
-            if rec.rec_type == RecommendationType.DATETIME_CONVERSION:
-                datetime_cols.add(rec.column_name)
+        # 2. Gather "Future" datetimes from the pipeline
+        # We only consider enabled recommendations to ensure the
+        # look-ahead represents the actual intended output.
+        future_datetimes = {
+            rec.column_name
+            for rec in self._pipeline
+            if (rec.rec_type == RecommendationType.DATETIME_CONVERSION and rec.enabled)
+        }
+
+        # Combine both sets
+        datetime_cols.update(future_datetimes)
 
         return datetime_cols
 
     def _decide_int_depth(self, series: pd.Series) -> BitDepth:
-        """Helper to pick between 32 and 64 bit based on max value."""
-        # max value for int32 is 2,147,483,647
-        if series.max() < 2e9 and series.min() > -2e9:
-            return BitDepth.INT32
+        """
+        Determines the optimal integer bit-depth based on the observed data range.
+
+        Evaluates the minimum and maximum values of a series to suggest the most
+        memory-efficient integer type. Downcasting from 64-bit to 32-bit integers
+        can reduce memory consumption by 50% without data loss.
+
+        Parameters
+        ----------
+        series : pd.Series
+            The numeric pandas Series to evaluate for bit-depth optimization.
+
+        Returns
+        -------
+        BitDepth
+            Returns BitDepth.INT32 if the data range fits within a conservative
+            ±2 billion threshold; otherwise returns BitDepth.INT64.
+
+        Notes
+        -----
+        The threshold is set at 2,000,000,000 (2.0e9) to provide a safety buffer
+        below the theoretical 32-bit signed integer limit of 2,147,483,647.
+        """
+        try:
+            # Drop nulls to evaluate actual data range
+            s_min = series.min()
+            s_max = series.max()
+
+            # Guard against empty or all-null series
+            if pd.isna(s_min) or pd.isna(s_max):
+                return BitDepth.INT64
+
+            # Conservative threshold to prevent overflow in future data appends
+            limit = 2_000_000_000
+
+            if s_min > -limit and s_max < limit:
+                return BitDepth.INT32
+
+        except (TypeError, ValueError):
+            # Fallback to standard 64-bit if data is non-numeric or incompatible
+            return BitDepth.INT64
+
         return BitDepth.INT64
+
+    def _apply_column_hint(
+        self, col_name: str, series: pd.Series, hint: ColumnHint
+    ) -> None:
+        """
+        Translates a user-provided ColumnHint into specific pipeline recommendations.
+
+        Parameters
+        ----------
+        col_name : str
+            The name of the column to which the hint applies.
+        series : pd.Series
+            The data series associated with the column for validation.
+        hint : ColumnHint
+            The user-defined hint object containing logical types and strategies.
+        """
+        user_note = " [User Hint Applied]"
+
+        # 1. Immediate Exit: User wants to bypass analysis
+        if hint.is_ignored:
+            return
+
+        # 2. Forced Drop
+        if hint.should_drop:
+            rec_drop = NonInformativeRecommendation(
+                column_name=col_name,
+                description=f"Drop column '{col_name}' [User Hint: Forced Drop]",
+                reason="Forced drop via user hint",
+            )
+            rec_drop.is_locked = True
+            self._pipeline.append(rec_drop)
+            return
+
+        # 3. Datetime Logic
+        if hint.logical_type == ColumnHintType.DATETIME:
+            if not pd.api.types.is_datetime64_any_dtype(series):
+                fmt_desc = (
+                    f" using format {hint.datetime_format}"
+                    if hint.datetime_format
+                    else ""
+                )
+                rec_dt = DatetimeConversionRecommendation(
+                    column_name=col_name,
+                    description=f"Convert '{col_name}' to datetime{fmt_desc}{user_note}",
+                    detected_format=hint.datetime_format,
+                )
+                rec_dt.is_locked = True
+                self._pipeline.append(rec_dt)
+
+            props = DatetimeProperty(0)
+            if hint.datetime_features:
+                for p in hint.datetime_features:
+                    props |= p
+
+            extraction_rec = FeatureExtractionRecommendation(
+                column_name=col_name,
+                description=f"Extract datetime features from '{col_name}'{user_note}",
+                properties=props,
+                output_columns=hint.output_names,
+            )
+            extraction_rec.is_locked = True
+            self._pipeline.append(extraction_rec)
+            return
+
+        # 4. Distance Logic
+        elif hint.logical_type == ColumnHintType.DISTANCE:
+            lower_bound = float(hint.floor) if hint.floor is not None else 0.0
+            upper_bound = float(hint.ceiling) if hint.ceiling is not None else 500.0
+
+            rec_distance = OutlierHandlingRecommendation(
+                column_name=col_name,
+                description=f"Distance column '{col_name}' ({hint.unit}): nullify values outside [{lower_bound}, {upper_bound}] to catch sensor errors{user_note}",
+                strategy=OutlierHandlingStrategy.NULLIFY,
+                lower_bound=lower_bound,
+                upper_bound=upper_bound,
+            )
+            rec_distance.is_locked = True
+            self._pipeline.append(rec_distance)
+            return
+
+        # 5. Geospatial Logic
+        elif hint.logical_type == ColumnHintType.GEOSPATIAL:
+            if hint.lat_bounds is not None:
+                lat_lower, lat_upper = hint.lat_bounds
+                rec_lat = OutlierHandlingRecommendation(
+                    column_name=col_name,
+                    description=f"Latitude column '{col_name}': nullify values outside bounding box [{lat_lower}, {lat_upper}]{user_note}",
+                    strategy=OutlierHandlingStrategy.NULLIFY,
+                    lower_bound=float(lat_lower),
+                    upper_bound=float(lat_upper),
+                )
+                rec_lat.is_locked = True
+                self._pipeline.append(rec_lat)
+
+            if hint.lon_bounds is not None:
+                lon_lower, lon_upper = hint.lon_bounds
+                rec_lon = OutlierHandlingRecommendation(
+                    column_name=col_name,
+                    description=f"Longitude column '{col_name}': nullify values outside bounding box [{lon_lower}, {lon_upper}]{user_note}",
+                    strategy=OutlierHandlingStrategy.NULLIFY,
+                    lower_bound=float(lon_lower),
+                    upper_bound=float(lon_upper),
+                )
+                rec_lon.is_locked = True
+                self._pipeline.append(rec_lon)
+            return
+
+        # 6. Aggregation Logic
+        elif (
+            hint.logical_type == ColumnHintType.AGGREGATE
+            and hint.agg_columns
+            and hint.agg_op
+        ):
+            out_name = None
+            if hint.output_names:
+                out_name = hint.output_names.get("aggregate") or hint.output_names.get(
+                    "output"
+                )
+            if not out_name:
+                out_name = f"{col_name}_{hint.agg_op}"
+
+            rec_agg = AggregationRecommendation(
+                column_name=(hint.agg_columns[0] if hint.agg_columns else col_name),
+                description=f"Aggregate columns {hint.agg_columns} with '{hint.agg_op}' into '{out_name}'{user_note}",
+                agg_columns=hint.agg_columns,
+                agg_op=hint.agg_op,
+                output_column=out_name,
+                decimal_places=hint.decimal_places,
+                rounding_mode=(
+                    hint.rounding_mode if hint.rounding_mode else RoundingMode.NEAREST
+                ),
+                scale_factor=hint.scale_factor,
+            )
+            rec_agg.is_locked = True
+            self._pipeline.append(rec_agg)
+            return
+
+        # 7. Numeric & Financial Logic
+        elif hint.logical_type in (ColumnHintType.NUMERIC, ColumnHintType.FINANCIAL):
+            if hint.floor is not None or hint.ceiling is not None:
+                lower = (
+                    float(hint.floor) if hint.floor is not None else float(series.min())
+                )
+                upper = (
+                    float(hint.ceiling)
+                    if hint.ceiling is not None
+                    else float(series.max())
+                )
+
+                rec_clip = OutlierHandlingRecommendation(
+                    column_name=col_name,
+                    description=f"Clip '{col_name}' to bounds [{lower}, {upper}]{user_note}",
+                    strategy=OutlierHandlingStrategy.CLIP,
+                    lower_bound=lower,
+                    upper_bound=upper,
+                )
+                rec_clip.is_locked = True
+                self._pipeline.append(rec_clip)
+
+            non_null = series.dropna()
+            if (
+                hint.logical_type == ColumnHintType.NUMERIC
+                and hint.convert_to_int is True
+            ):
+                integer_count = (
+                    int(((non_null % 1) == 0).sum())
+                    if pd.api.types.is_numeric_dtype(series)
+                    else 0
+                )
+                rec_int = IntegerConversionRecommendation(
+                    column_name=col_name,
+                    description=f"Convert '{col_name}' to int64{user_note}",
+                    integer_count=integer_count,
+                )
+                rec_int.is_locked = True
+                self._pipeline.append(rec_int)
+            elif hint.decimal_places is not None:
+                min_val = float(non_null.min()) if len(non_null) > 0 else float("nan")
+                max_val = float(non_null.max()) if len(non_null) > 0 else float("nan")
+                rec_dec = DecimalPrecisionRecommendation(
+                    column_name=col_name,
+                    description=f"Optimize decimal precision of '{col_name}' to {hint.decimal_places} places{user_note}",
+                    max_decimal_places=int(hint.decimal_places),
+                    min_value=min_val,
+                    max_value=max_val,
+                    convert_to_int=False,
+                    rounding_mode=(
+                        hint.rounding_mode
+                        if hint.rounding_mode
+                        else RoundingMode.NEAREST
+                    ),
+                    scale_factor=hint.scale_factor,
+                )
+                rec_dec.is_locked = True
+                self._pipeline.append(rec_dec)
+            return
+
+        # 8. Categorical Logic
+        elif hint.logical_type == ColumnHintType.CATEGORICAL:
+            rec_cat = CategoricalConversionRecommendation(
+                column_name=col_name,
+                description=f"Convert '{col_name}' to categorical{user_note}",
+                unique_values=int(series.nunique()),
+            )
+            rec_cat.is_locked = True
+            self._pipeline.append(rec_cat)
+            return
+
+    def _is_string_datetime(self, sample: pd.Series) -> tuple[bool, str | None]:
+        """
+        Heuristically determines if a string sample represents datetime data.
+
+        Parameters
+        ----------
+        sample : pd.Series
+            A small sample of non-null string values from a column.
+
+        Returns
+        -------
+        is_datetime : bool
+            True if the sample can be reliably parsed as datetime.
+        inferred_format : str or None
+            The format string if one could be inferred, otherwise None.
+        """
+        if sample.empty:
+            return False, None
+
+        try:
+            # We use errors='coerce' so that it returns NaT for unparseable strings
+            # and doesn't raise a hard exception.
+            converted = pd.to_datetime(
+                sample,
+                errors="coerce",
+                format=(
+                    "mixed"
+                    if self.default_date_format == "ISO8601"
+                    else self.default_date_format
+                ),
+            )
+
+            # If at least 80% of the sample was successfully converted,
+            # we consider it a datetime column.
+            success_ratio = converted.notna().mean()
+
+            if success_ratio > 0.8:
+                # We attempt to guess the format from the first valid value
+                # for the recommendation's description.
+                # In modern Pandas (2.0+), we can use pd.to_datetime with
+                # dayfirst/yearfirst logic if needed.
+                return True, "ISO8601 or similar"
+
+            return False, None
+
+        except (ValueError, TypeError, OverflowError):
+            return False, None
+
+    def _analyze_string_heuristics(
+        self,
+        col_name: str,
+        series: pd.Series,
+        unique_count: int,
+        total_rows: int,
+        config: dict,
+    ) -> None:
+        """
+        Heuristic brain for object/string columns to find dates or categories.
+        """
+        # A. Automated Datetime Inference
+        # Sample the column to check for date patterns
+        sample = series.dropna().head(100).astype(str)
+        is_dt, fmt = self._is_string_datetime(sample)
+
+        if is_dt:
+            rec_dt = DatetimeConversionRecommendation(
+                column_name=col_name,
+                description=f"Convert '{col_name}' to datetime (Detected format: {fmt})",
+                detected_format=fmt,
+            )
+            self._pipeline.append(rec_dt)
+
+            # Auto-suggest extraction for new dates (Year, Month, Day by default)
+            rec_ext = FeatureExtractionRecommendation(
+                column_name=col_name,
+                description=f"Extract standard temporal features from '{col_name}'",
+                properties=(
+                    DatetimeProperty.YEAR
+                    | DatetimeProperty.MONTH
+                    | DatetimeProperty.DAY
+                ),
+            )
+            self._pipeline.append(rec_ext)
+            return  # Datetimes are prioritized over categorical conversion
+
+        # B. Categorical Conversion Heuristic
+        # If low cardinality relative to total rows, suggest 'category' dtype
+        cardinality_ratio = unique_count / total_rows if total_rows > 0 else 1.0
+        if unique_count > 1 and cardinality_ratio < config.get(
+            "categorical_threshold", 0.05
+        ):
+            rec_cat = CategoricalConversionRecommendation(
+                column_name=col_name,
+                description=f"Convert high-redundancy column '{col_name}' to categorical",
+                unique_values=unique_count,
+            )
+            self._pipeline.append(rec_cat)
+
+    def _analyze_missing_values(
+        self,
+        col_name: str,
+        series: pd.Series,
+        null_count: int,
+        null_ratio: float,
+        config: dict,
+    ) -> None:
+        """
+        Analyzes missing data and recommends an appropriate imputation or drop strategy.
+
+        Parameters
+        ----------
+        col_name : str
+            The name of the column.
+        series : pd.Series
+            The data series to analyze.
+        null_count : int
+            Number of missing values.
+        null_ratio : float
+            Ratio of missing values to total rows.
+        config : dict
+            Configuration thresholds, specifically 'impute_threshold'
+            and 'max_drop_threshold'.
+        """
+        # Strategy A: Column is too sparse to be useful
+        if null_ratio > config.get("max_drop_threshold", 0.9):
+            rec_drop = NonInformativeRecommendation(
+                column_name=col_name,
+                description=f"Drop '{col_name}': {null_ratio:.1%} missing values exceeds threshold.",
+                reason="High null density",
+            )
+            self._pipeline.append(rec_drop)
+            return
+
+        # Strategy B: Recommend Imputation
+        if null_ratio > 0:
+            # Heuristic: Use Median for numeric with potential outliers,
+            # Mean for normal-ish distributions, or Mode for strings.
+            if pd.api.types.is_numeric_dtype(series):
+                strategy = MissingValueStrategy.IMPUTE_MEDIAN
+            else:
+                strategy = MissingValueStrategy.IMPUTE_MODE
+
+            rec_mv = MissingValuesRecommendation(
+                column_name=col_name,
+                description=f"Handle {null_count} missing values in '{col_name}' using {strategy.name} strategy.",
+                strategy=strategy,
+            )
+            self._pipeline.append(rec_mv)
+
+    def _analyze_numeric_heuristics(
+        self,
+        col_name: str,
+        series: pd.Series,
+        unique_count: int,
+        total_rows: int,
+        config: dict,
+    ) -> None:
+        """
+        Automated discovery of boolean flags and integer bit-depth optimizations.
+        """
+        non_null = series.dropna()
+        if non_null.empty:
+            return
+
+        # A. Boolean Detection
+        # Identify binary columns (exactly 2 unique values)
+        if unique_count == 2:
+            unique_vals = list(non_null.unique())
+
+            # Numeric-specific logic for 0/1, but this could be expanded
+            # for strings like Y/N in string_heuristics later.
+            if pd.api.types.is_numeric_dtype(series):
+                if set(unique_vals) == {0, 1}:
+                    rec_bool = BooleanClassificationRecommendation(
+                        column_name=col_name,
+                        description=f"Convert binary column '{col_name}' (0, 1) to boolean.",
+                        values=unique_vals,  # Pass the list as expected by the dataclass
+                    )
+                    self._pipeline.append(rec_bool)
+                    return
+
+        # B. Integer Bit-Depth Optimization
+        is_float = pd.api.types.is_float_dtype(series)
+        if is_float:
+            # Check if all values are mathematically integers
+            integer_count = int(((non_null % 1) == 0).sum())
+            if integer_count == len(non_null) and len(non_null) > 0:
+                depth = self._decide_int_depth(series)
+                rec_int = IntegerConversionRecommendation(
+                    column_name=col_name,
+                    description=f"Cast float '{col_name}' to {depth.name} (all values are integers).",
+                    integer_count=integer_count,
+                )
+                self._pipeline.append(rec_int)
+
+    def _analyze_outliers_and_distribution(
+        self, col_name: str, series: pd.Series, config: dict
+    ) -> None:
+        """
+        Detects statistical outliers using the Interquartile Range (IQR) method.
+        """
+        non_null = series.dropna()
+        if len(non_null) < 20:  # Statistical significance guard
+            return
+
+        q1 = non_null.quantile(0.25)
+        q3 = non_null.quantile(0.75)
+        iqr = q3 - q1
+
+        lower_bound = q1 - (1.5 * iqr)
+        upper_bound = q3 + (1.5 * iqr)
+
+        outliers = non_null[(non_null < lower_bound) | (non_null > upper_bound)]
+        outlier_ratio = len(outliers) / len(non_null)
+
+        # If outliers exist but aren't overwhelming (>0% but <10%)
+        if 0 < outlier_ratio < config.get("outlier_threshold", 0.1):
+            rec_out = OutlierHandlingRecommendation(
+                column_name=col_name,
+                description=f"Handle outliers in '{col_name}' ({outlier_ratio:.1%}) using IQR clipping.",
+                strategy=OutlierHandlingStrategy.CLIP,
+                lower_bound=float(lower_bound),
+                upper_bound=float(upper_bound),
+            )
+            self._pipeline.append(rec_out)
+
+    def _analyze_column_heuristics(
+        self,
+        col_name: str,
+        series: pd.Series,
+        unique_count: int,
+        total_rows: int,
+        config: dict,
+    ) -> None:
+        """
+        Executes automated heuristic analysis for a single column.
+
+        This worker method identifies data quality issues (missing values) and
+        logical data types (datetimes, booleans, integers, categories) through
+        statistical analysis and pattern matching.
+
+        Parameters
+        ----------
+        col_name : str
+            The name of the column to analyze.
+        series : pd.Series
+            The data series to evaluate.
+        unique_count : int
+            The number of unique values in the series (pre-calculated).
+        total_rows : int
+            Total row count of the DataFrame for ratio calculations.
+        config : dict
+            Configuration dictionary containing thresholds (e.g.,
+            'categorical_threshold', 'impute_threshold').
+
+        Returns
+        -------
+        None
+        """
+        non_null_count = int(series.count())
+        null_count = total_rows - non_null_count
+        null_ratio = null_count / total_rows if total_rows > 0 else 0
+
+        # 1. Automated Missing Value Detection
+        if null_count > 0:
+            self._analyze_missing_values(
+                col_name, series, null_count, null_ratio, config
+            )
+
+        # 2. Type-Specific Logic Dispatcher
+        is_numeric = pd.api.types.is_numeric_dtype(series)
+
+        if is_numeric:
+            self._analyze_numeric_heuristics(
+                col_name, series, unique_count, total_rows, config
+            )
+        else:
+            # Analyze strings/objects for Datetime potential or Categorical conversion
+            self._analyze_string_heuristics(
+                col_name, series, unique_count, total_rows, config
+            )
+
+        # 3. Outlier and Distribution Analysis
+        if is_numeric and not pd.api.types.is_bool_dtype(series):
+            # Only run for continuous-like numeric data
+            self._analyze_outliers_and_distribution(col_name, series, config)
+
+    def _discover_cross_column_features(
+        self, df: pd.DataFrame, datetime_cols: set[str]
+    ) -> None:
+        """
+        Scans pairs of datetime columns to identify and suggest interval features.
+
+        Uses linguistic similarity and statistical "arrow of time" checks to
+        discover logical durations (e.g., 'start_date' to 'end_date').
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame being analyzed.
+        datetime_cols : set of str
+            The set of columns identified as current or future datetimes.
+
+        Returns
+        -------
+        None
+        """
+        # We need at least two columns to find an interval
+        cols = sorted(list(datetime_cols))
+        if len(cols) < 2:
+            return
+
+        import itertools
+
+        # Evaluate all unique pairs (A, B)
+        for col_a, col_b in itertools.permutations(cols, 2):
+
+            # 1. Linguistic Check: Do the names sound like a pair?
+            # (e.g., 'start' vs 'end')
+            sim_score = self._semantic_similarity(col_a, col_b)
+            if sim_score < 0.4:
+                continue
+
+            # 2. Statistical Check: Does B usually happen after A?
+            # We use a sample to keep this fast.
+            arrow_ratio = self._check_positive_delta_ratio(df, col_a, col_b)
+            if arrow_ratio < 0.9:
+                continue
+
+            # 3. Magnitude Check: Is the duration "human-scale" (< 10 years)?
+            # Prevents pairing unrelated dates like BirthDate and OrderDate.
+            if not self._check_reasonable_duration_magnitude(df, col_a, col_b):
+                continue
+
+            # 4. Generate Recommendation
+            # Derive a clean name (e.g., 'order_processing_duration')
+            out_name = self._generate_duration_column_name(col_a, col_b)
+
+            # Check if we already have a recommendation for this pair to avoid duplicates
+            exists = any(
+                isinstance(r, DatetimeDurationRecommendation)
+                and r.start_column == col_a
+                and r.end_column == col_b
+                for r in self._pipeline
+            )
+
+            if not exists:
+                rec_dur = DatetimeDurationRecommendation(
+                    # Use col_a as the primary anchor for the recommendation
+                    column_name=col_a,
+                    description=(
+                        f"Calculate duration between '{col_a}' and '{col_b}' "
+                        f"as new feature '{out_name}'."
+                    ),
+                    start_column=col_a,
+                    end_column=col_b,
+                    output_column=out_name,
+                    unit="days",
+                )
+                self._pipeline.append(rec_dur)
+
+    def _refine_pipeline_strategies(self) -> None:
+        """
+        Performs a final refinement pass on the generated recommendations.
+
+        This method handles three critical post-generation tasks:
+        1. Conflict Resolution: Ensures no two recommendations attempt to create
+           the same output column.
+        2. Priority Alignment: Sorts the entire pipeline based on the
+           EXECUTION_PRIORITY mapping.
+        3. Metadata Enrichment: Updates descriptions or adds warnings for
+           inter-dependent recommendations.
+
+        Returns
+        -------
+        None
+        """
+        if not self._pipeline:
+            return
+
+        # 1. Conflict Resolution: Check for duplicate output column names
+        # This prevents two different heuristics from naming a feature
+        # 'user_id_duration', which would cause a collision during apply().
+        seen_outputs: dict[str, Recommendation] = {}
+        duplicates_to_remove = []
+
+        for rec in self._pipeline:
+            output_col = getattr(rec, "output_column", None)
+            if output_col:
+                if output_col in seen_outputs:
+                    # Logic: Locked (User-hinted) recs always win over automated ones.
+                    existing_rec = seen_outputs[output_col]
+                    if rec.is_locked and not existing_rec.is_locked:
+                        duplicates_to_remove.append(existing_rec)
+                        seen_outputs[output_col] = rec
+                    else:
+                        duplicates_to_remove.append(rec)
+                else:
+                    seen_outputs[output_col] = rec
+
+        # Remove identifies duplicates
+        if duplicates_to_remove:
+            self._pipeline = [
+                r for r in self._pipeline if r not in duplicates_to_remove
+            ]
+
+        # 2. Priority Alignment
+        # We sort by the predefined EXECUTION_PRIORITY to ensure that 'Drops'
+        # happen before 'Conversions', which happen before 'Imputations'.
+        self._pipeline.sort(key=lambda r: self.EXECUTION_PRIORITY.get(r.rec_type, 999))
+
+        # 3. Global Integrity Check
+        # If a column is slated to be dropped, ensure no 'Conversion' or
+        # 'Optimization' recommendations remain for it (Cleanup).
+        dropped_cols = {
+            r.column_name
+            for r in self._pipeline
+            if r.rec_type == RecommendationType.NON_INFORMATIVE
+        }
+
+        if dropped_cols:
+            self._pipeline = [
+                r
+                for r in self._pipeline
+                if not (
+                    r.column_name in dropped_cols
+                    and r.rec_type != RecommendationType.NON_INFORMATIVE
+                )
+            ]
+
+        # 4. Final Description Polishing
+        # Optional: Add " (Chained)" suffix to recommendations that depend on
+        # the output of a previous recommendation.
 
     def generate_recommendations(
         self,
@@ -2697,1092 +3472,102 @@ class RecommendationManager:
         allow_categorical_encoding: bool = True,
         hints_only: bool = False,
         overwrite: bool = True,
+        **kwargs: Any,
     ) -> None:
-        """Generate and add data preparation recommendations to the pipeline.
-
-        Analyzes each column in the DataFrame and adds appropriate recommendations
-        based on data characteristics (missing values, cardinality, data type, etc.).
-
-        If ``hints`` are provided, those columns are handled using explicit user guidance.
-        Hint-based recommendations are marked with ``is_locked=True`` and have their
-        descriptions appended with "[User Hint Applied]". Standard heuristics for the hinted
-        concern are bypassed.
-
-        Args:
-            df (pd.DataFrame): The DataFrame to analyze.
-            target_column (str | None): Name of target column (excluded from certain recommendations).
-            hints (dict[str, ColumnHint] | None): Optional column-specific guidance. When provided,
-                hint-driven recommendations are added with is_locked=True and heuristic generation
-                for the hinted concern is bypassed.
-            max_decimal_places (int | dict[str, int] | None): Max decimal precision.
-            default_max_decimal_places (int | None): Default max decimal places.
-            min_binning_unique_values (int | dict[str, int] | None): Min unique values for binning.
-            default_min_binning_unique_values (int): Default minimum binning cardinality.
-            max_binning_unique_values (int | dict[str, int] | None): Max unique values for binning.
-            default_max_binning_unique_values (int): Default maximum binning cardinality.
-            allow_categorical_encoding (bool): If True (default), allow encoding recommendations
-                for columns marked for categorical conversion. If False, suppress encoding
-                for categorical-bound columns.
-            target_column (str | None): Name of the target column (for imbalance detection).
-                If provided, class imbalance will be analyzed for this column.
-            max_decimal_places (int | dict | None): Maximum decimal places for precision optimization.
-                Can be an int (applies to all float columns) or dict mapping column names to their
-                specific max decimal places. If provided, float columns will be checked for
-                decimal precision optimization.
-            default_max_decimal_places (int | None): Default max decimal places to use for columns
-                not in the max_decimal_places dict. Only used if max_decimal_places is a dict.
-            min_binning_unique_values (int | dict | None): Minimum unique values for binning consideration.
-                Can be an int (applies to all numeric columns) or dict mapping column names to their
-                specific minimum values. If None, default_min_binning_unique_values is used for all columns.
-            default_min_binning_unique_values (int): Default minimum unique values for columns not in
-                the min_binning_unique_values dict. Only used if min_binning_unique_values is a dict.
-                Default is 10.
-            max_binning_unique_values (int | dict | None): Maximum unique values for binning consideration.
-                Can be an int (applies to all numeric columns) or dict mapping column names to their
-                specific maximum values. If None, default_max_binning_unique_values is used for all columns.
-            default_max_binning_unique_values (int): Default maximum unique values for columns not in
-                the max_binning_unique_values dict. Only used if max_binning_unique_values is a dict.
-                Default is 1000. Adjust higher for large datasets where 1000 unique values might still
-                represent continuous data (e.g., millions of rows).
-            hints_only (bool): If True, only create recommendations from provided hints and skip
-                heuristic generation. Also records a warning for any DataFrame columns with neither
-                a hint nor a recommendation; these warnings appear in execution_summary(). Default False.
-            overwrite (bool): If True, clear the pipeline before adding recommendations.
-                If False, add recommendations to the existing pipeline. Default is True.
-
-        Example:
-            >>> manager = RecommendationManager()
-            >>> manager.generate_recommendations(df, target_column='target')
-            >>> result = manager.apply(df)
-
-            With hints and hints_only mode:
-            >>> hints = {
-            ...     'date_col': ColumnHint.datetime(datetime_features=[DatetimeProperty.DAYOFWEEK, DatetimeProperty.SIN_DAYOFWEEK]),
-            ...     'total': ColumnHint.aggregate(agg_columns=['a', 'b'], agg_op='sum', output_names={'aggregate': 'total_sum'})
-            ... }
-            >>> manager.generate_recommendations(df, hints=hints, hints_only=True)
-            >>> manager.execution_summary()  # Includes warnings for unhandled columns
-            >>> result = manager.apply(df)
         """
-        # Clear existing pipeline if overwrite is True
+        Orchestrates the analysis pipeline to generate data improvement suggestions.
+        """
+        # 1. Initialize/Reset State
         if overwrite:
-            self.clear()
+            self._pipeline = []
+            self._summary_warnings = []
 
-        # Import needed for analysis
-        from dsr_utils.datetime import (
-            is_string_datetime,
-            infer_string_datetime_format,
-            resolve_date_ambiguity,
-        )
-        from dsr_utils.enums import DatetimeFormat
+        # Sync passed hints to instance state for worker access
+        self._column_hints = hints or {}
 
-        # Track datetime columns to avoid redundant type checks later
-        existing_datetime_cols: set[str] = set()
-        # Track columns marked for categorical conversion for encoding suppression
-        categorical_conversion_cols: set[str] = set()
+        # Package thresholds into a single config object for workers
+        config = {
+            **self.DEFAULT_CONFIG,
+            "target_column": target_column,
+            "max_decimal_places": max_decimal_places,
+            "default_max_decimal_places": default_max_decimal_places,
+            "min_binning_unique_values": min_binning_unique_values,
+            "default_min_binning_unique_values": default_min_binning_unique_values,
+            "max_binning_unique_values": max_binning_unique_values,
+            "default_max_binning_unique_values": default_max_binning_unique_values,
+            "allow_categorical_encoding": allow_categorical_encoding,
+            **kwargs,
+        }
 
-        for col_name in df.columns:
-            series = df[col_name]
-            # 0.a. User hints override: create recommendations directly and bypass heuristics
-            hint = hints.get(col_name) if hints else None
-            if hints_only and hint is None:
-                # Skip heuristics when only hints should be used
-                continue
-            if hint is not None:
-                user_note = " [User Hint Applied]"
+        total_rows = len(df)
 
-                # Handle ignore hint: skip all processing
-                if hint.is_ignored:
-                    # Do nothing; column is left as-is, and warnings will be suppressed in hints_only
-                    continue
+        # --- STAGE 1: Individual Column Analysis ---
+        for col in df.columns:
+            series = df[col]
+            unique_count = int(series.nunique())
 
-                # Handle drop hint: create a NonInformativeRecommendation
-                if hint.should_drop:
-                    rec_drop = NonInformativeRecommendation(
-                        column_name=col_name,
-                        description=f"Drop column '{col_name}'" + user_note,
-                        reason="User hint: drop",
-                    )
-                    rec_drop.is_locked = True
-                    self._pipeline.append(rec_drop)
-                    continue
-
-                # Datetime hints: conversion and/or feature extraction
-                if hint.logical_type == ColumnHintType.DATETIME:
-                    # Datetime conversion if not already datetime
-                    if not pd.api.types.is_datetime64_any_dtype(series):
-                        rec_dt = DatetimeConversionRecommendation(
-                            column_name=col_name,
-                            description=(
-                                f"Convert '{col_name}' to datetime"
-                                + (
-                                    f" using format {hint.datetime_format}"
-                                    if hint.datetime_format
-                                    else ""
-                                )
-                                + user_note
-                            ),
-                            detected_format=hint.datetime_format,
-                        )
-                        rec_dt.is_locked = True
-                        self._pipeline.append(rec_dt)
-
-                    # Feature extraction as per hint
-                    props = DatetimeProperty(0)
-                    if hint.datetime_features:
-                        for p in hint.datetime_features:
-                            props |= p
-                    extraction_rec = FeatureExtractionRecommendation(
-                        column_name=col_name,
-                        description=f"Extract datetime features from '{col_name}'"
-                        + user_note,
-                        properties=props,
-                        output_columns=hint.output_names,
-                    )
-                    extraction_rec.is_locked = True
-                    self._pipeline.append(extraction_rec)
-                    # Skip remaining heuristics for this column
-                    continue
-
-                # Categorical hint: prefer categorical conversion
-                if hint.logical_type == ColumnHintType.CATEGORICAL:
-                    unique_count_hint = int(series.nunique())
-                    rec_cat = CategoricalConversionRecommendation(
-                        column_name=col_name,
-                        description=f"Convert '{col_name}' to categorical dtype"
-                        + user_note,
-                        unique_values=unique_count_hint,
-                    )
-                    rec_cat.is_locked = True
-                    self._pipeline.append(rec_cat)
-                    continue
-
-                # Numeric/Financial hints: apply floor/ceiling via clipping; support int/decimal controls for numeric
-                if hint.logical_type in (
-                    ColumnHintType.NUMERIC,
-                    ColumnHintType.FINANCIAL,
-                ):
-                    # Bounds clipping if specified
-                    if hint.floor is not None or hint.ceiling is not None:
-                        lower = (
-                            float(hint.floor)
-                            if hint.floor is not None
-                            else float(series.min())
-                        )
-                        upper = (
-                            float(hint.ceiling)
-                            if hint.ceiling is not None
-                            else float(series.max())
-                        )
-                        rec_clip = OutlierHandlingRecommendation(
-                            column_name=col_name,
-                            description=f"Clip '{col_name}' to bounds [{lower}, {upper}]"
-                            + user_note,
-                            strategy=OutlierHandlingStrategy.CLIP,
-                            lower_bound=lower,
-                            upper_bound=upper,
-                        )
-                        rec_clip.is_locked = True
-                        self._pipeline.append(rec_clip)
-
-                    # Numeric-specific controls
-                    if hint.logical_type == ColumnHintType.NUMERIC:
-                        # Prefer explicit int conversion if requested
-                        if hint.convert_to_int is True:
-                            # Compute integer_count for info (counts integer-like values)
-                            non_null = series.dropna()
-                            integer_count = (
-                                int(((non_null % 1) == 0).sum())
-                                if pd.api.types.is_numeric_dtype(series)
-                                else 0
-                            )
-                            rec_int = IntegerConversionRecommendation(
-                                column_name=col_name,
-                                description=f"Convert '{col_name}' to int64"
-                                + user_note,
-                                integer_count=integer_count,
-                            )
-                            rec_int.is_locked = True
-                            self._pipeline.append(rec_int)
-                        elif hint.decimal_places is not None:
-                            non_null = series.dropna()
-                            min_val = (
-                                float(non_null.min())
-                                if len(non_null) > 0
-                                else float("nan")
-                            )
-                            max_val = (
-                                float(non_null.max())
-                                if len(non_null) > 0
-                                else float("nan")
-                            )
-                            rec_dec = DecimalPrecisionRecommendation(
-                                column_name=col_name,
-                                description=f"Optimize decimal precision of '{col_name}' to {hint.decimal_places} places"
-                                + user_note,
-                                max_decimal_places=int(hint.decimal_places),
-                                min_value=min_val,
-                                max_value=max_val,
-                                convert_to_int=False,
-                                rounding_mode=(
-                                    hint.rounding_mode
-                                    if hint.rounding_mode
-                                    else RoundingMode.NEAREST
-                                ),
-                                scale_factor=hint.scale_factor,
-                            )
-                            rec_dec.is_locked = True
-                            self._pipeline.append(rec_dec)
-
-                    # Financial-specific controls: apply decimal_places if specified
-                    if (
-                        hint.logical_type == ColumnHintType.FINANCIAL
-                        and hint.decimal_places is not None
-                    ):
-                        non_null = series.dropna()
-                        min_val = (
-                            float(non_null.min()) if len(non_null) > 0 else float("nan")
-                        )
-                        max_val = (
-                            float(non_null.max()) if len(non_null) > 0 else float("nan")
-                        )
-                        rec_dec = DecimalPrecisionRecommendation(
-                            column_name=col_name,
-                            description=f"Optimize decimal precision of '{col_name}' to {hint.decimal_places} places"
-                            + user_note,
-                            max_decimal_places=int(hint.decimal_places),
-                            min_value=min_val,
-                            max_value=max_val,
-                            convert_to_int=False,
-                            rounding_mode=(
-                                hint.rounding_mode
-                                if hint.rounding_mode
-                                else RoundingMode.NEAREST
-                            ),
-                            scale_factor=hint.scale_factor,
-                        )
-                        rec_dec.is_locked = True
-                        self._pipeline.append(rec_dec)
-
-                    # Skip remaining heuristics for this column after applying numeric/financial hints
-                    continue
-
-                # Distance hint: use physical bounds with nullify strategy
-                if hint.logical_type == ColumnHintType.DISTANCE:
-                    # Set lower bound from hint.floor, default to 0.0
-                    lower_bound = float(hint.floor) if hint.floor is not None else 0.0
-                    # Set upper bound from hint.ceiling, default to 500 miles (domain-safe)
-                    upper_bound = (
-                        float(hint.ceiling) if hint.ceiling is not None else 500.0
-                    )
-
-                    rec_distance = OutlierHandlingRecommendation(
-                        column_name=col_name,
-                        description=f"Distance column '{col_name}' ({hint.unit}): nullify values outside [{lower_bound}, {upper_bound}] to catch sensor errors"
-                        + user_note,
-                        strategy=OutlierHandlingStrategy.NULLIFY,
-                        lower_bound=lower_bound,
-                        upper_bound=upper_bound,
-                    )
-                    rec_distance.is_locked = True
-                    self._pipeline.append(rec_distance)
-                    # Skip remaining heuristics for this column
-                    continue
-
-                # Geospatial hint: create bounds checks for latitude and longitude
-                if hint.logical_type == ColumnHintType.GEOSPATIAL:
-                    # For latitude column
-                    if hint.lat_bounds is not None:
-                        lat_lower, lat_upper = hint.lat_bounds
-                        rec_lat = OutlierHandlingRecommendation(
-                            column_name=col_name,
-                            description=f"Latitude column '{col_name}': nullify values outside bounding box [{lat_lower}, {lat_upper}]"
-                            + user_note,
-                            strategy=OutlierHandlingStrategy.NULLIFY,
-                            lower_bound=float(lat_lower),
-                            upper_bound=float(lat_upper),
-                        )
-                        rec_lat.is_locked = True
-                        self._pipeline.append(rec_lat)
-
-                    # For longitude column
-                    if hint.lon_bounds is not None:
-                        lon_lower, lon_upper = hint.lon_bounds
-                        rec_lon = OutlierHandlingRecommendation(
-                            column_name=col_name,
-                            description=f"Longitude column '{col_name}': nullify values outside bounding box [{lon_lower}, {lon_upper}]"
-                            + user_note,
-                            strategy=OutlierHandlingStrategy.NULLIFY,
-                            lower_bound=float(lon_lower),
-                            upper_bound=float(lon_upper),
-                        )
-                        rec_lon.is_locked = True
-                        self._pipeline.append(rec_lon)
-
-                    # Skip remaining heuristics for this column
-                    continue
-
-                # Aggregation hint: create/validate aggregate feature
-                if (
-                    hint.logical_type == ColumnHintType.AGGREGATE
-                    and hint.agg_columns
-                    and hint.agg_op
-                ):
-                    # Determine output column name
-                    out_name = None
-                    if hint.output_names:
-                        out_name = hint.output_names.get(
-                            "aggregate"
-                        ) or hint.output_names.get("output")
-                    if not out_name:
-                        out_name = f"{col_name}_{hint.agg_op}"
-
-                    rec_agg = AggregationRecommendation(
-                        column_name=(
-                            hint.agg_columns[0] if hint.agg_columns else col_name
-                        ),
-                        description=f"Aggregate columns {hint.agg_columns} with '{hint.agg_op}' into '{out_name}'"
-                        + user_note,
-                        agg_columns=hint.agg_columns,
-                        agg_op=hint.agg_op,
-                        output_column=out_name,
-                        decimal_places=hint.decimal_places,
-                        rounding_mode=(
-                            hint.rounding_mode
-                            if hint.rounding_mode
-                            else RoundingMode.NEAREST
-                        ),
-                        scale_factor=hint.scale_factor,
-                    )
-                    rec_agg.is_locked = True
-                    self._pipeline.append(rec_agg)
-                    continue
-
-            # Cache commonly used series transformations for performance
-            non_null_series = series.dropna()
-            non_null_unique = non_null_series.unique()
-
-            # Cache min/max for numeric columns (computed lazily when needed)
-            non_null_min = None
-            non_null_max = None
-
-            # Cache value_counts (computed lazily when needed)
-            value_counts_cache = None
-
-            # 0. Early detection: Check if column is datetime or datetime-like string
-            is_datetime = pd.api.types.is_datetime64_any_dtype(series)
-            if is_datetime:
-                existing_datetime_cols.add(col_name)
-            is_datetime_string = False
-            detected_format = None
-
-            if not is_datetime and series.dtype == "object":
-                try:
-                    if is_string_datetime(series):
-                        is_datetime_string = True
-                        detected_format = infer_string_datetime_format(series)
-                except Exception:
-                    pass
-
-            unique_count = series.nunique()
-            total_rows = len(df)
-            is_numeric = pd.api.types.is_numeric_dtype(series)
-            suggested_categorical_conversion = False
-
-            # 2. Check for missing values
-            missing_count = series.isna().sum()
-            if missing_count > 0:
-                missing_percentage = (missing_count / total_rows) * 100
-
-                if missing_percentage < 10:
-                    strategy = MissingValueStrategy.DROP_ROWS
-                elif missing_percentage > 50:
-                    strategy = MissingValueStrategy.DROP_COLUMN
-                else:
-                    # Default to mean; refined later based on categorical qualification or skewness
-                    strategy = MissingValueStrategy.IMPUTE_MEAN
-
-                rec = MissingValuesRecommendation(
-                    column_name=col_name,
-                    description=f"Column '{col_name}' has {missing_count} missing values ({missing_percentage:.1f}%).",
-                    missing_count=missing_count,
-                    missing_percentage=missing_percentage,
-                    strategy=strategy,
-                )
-                self._pipeline.append(rec)
-
-            # 2.5. Check for existing datetime columns
-            if is_datetime:
-                has_time_component = False
-                if not series.dropna().empty:
-                    sample_dt = series.dropna().iloc[0]
-                    if hasattr(sample_dt, "hour"):
-                        time_check = series.dropna().head(100)
-                        has_time_component = any(
-                            dt.hour != 0 or dt.minute != 0 or dt.second != 0
-                            for dt in time_check
-                            if pd.notna(dt)
-                        )
-
-                properties = (
-                    DatetimeProperty.YEAR
-                    | DatetimeProperty.MONTH
-                    | DatetimeProperty.DAYOFWEEK
-                )
-                # Add cyclic features in pairs for better seasonal/cyclical representations
-                properties |= (
-                    DatetimeProperty.SIN_DAYOFWEEK | DatetimeProperty.COS_DAYOFWEEK
-                )
-                properties |= DatetimeProperty.SIN_MONTH | DatetimeProperty.COS_MONTH
-                if has_time_component:
-                    properties |= (
-                        DatetimeProperty.HOUR
-                        | DatetimeProperty.SIN_HOUR
-                        | DatetimeProperty.COS_HOUR
-                    )
-
-                extraction_rec = FeatureExtractionRecommendation(
-                    column_name=col_name,
-                    description=f"Extract datetime features from '{col_name}' (Year, Month, DayOfWeek with cyclic encoding{', Hour with cyclic encoding' if has_time_component else ''}).",
-                    properties=properties,
-                )
-                self._pipeline.append(extraction_rec)
-
-                # Remove conflicting NonInformativeRecommendation if present
-                self._remove_conflicting_non_informative(col_name)
-
-            # 2.6. Handle datetime string columns
-            if is_datetime_string:
-                if detected_format:
-                    format_name = None
-                    for fmt_enum in DatetimeFormat:
-                        if fmt_enum.value == detected_format:
-                            format_name = fmt_enum.name
-                            break
-
-                    ambiguity_note = ""
-                    if format_name and (
-                        format_name == "US_DATE" or format_name == "EU_DATE"
-                    ):
-                        ambiguity_result = resolve_date_ambiguity(series)
-                        if ambiguity_result == "AMBIGUOUS":
-                            ambiguity_note = " [WARNING: Format is ambiguous; verify with domain knowledge]"
-                        elif ambiguity_result in ["US", "EU"]:
-                            if ambiguity_result == "US" and format_name == "EU_DATE":
-                                format_name = "US_DATE"
-                            elif ambiguity_result == "EU" and format_name == "US_DATE":
-                                format_name = "EU_DATE"
-
-                    if format_name:
-                        desc = f"Column '{col_name}' appears to contain datetimes; convert using DatetimeFormat.{format_name} ({detected_format}).{ambiguity_note}"
-                    else:
-                        desc = f"Column '{col_name}' appears to contain datetimes; convert using format {detected_format}."
-                else:
-                    desc = f"Column '{col_name}' appears to contain datetimes; convert to datetime dtype."
-
-                rec = DatetimeConversionRecommendation(
-                    column_name=col_name,
-                    description=desc,
-                    detected_format=detected_format,
-                )
-                self._pipeline.append(rec)
-
-                properties = (
-                    DatetimeProperty.YEAR
-                    | DatetimeProperty.MONTH
-                    | DatetimeProperty.DAYOFWEEK
-                )
-                # Add cyclic features in pairs for better seasonal/cyclical representations
-                properties |= (
-                    DatetimeProperty.SIN_DAYOFWEEK | DatetimeProperty.COS_DAYOFWEEK
-                )
-                properties |= DatetimeProperty.SIN_MONTH | DatetimeProperty.COS_MONTH
-                if detected_format and any(
-                    time_indicator in detected_format
-                    for time_indicator in ["%H", "%M", "%S"]
-                ):
-                    properties |= (
-                        DatetimeProperty.HOUR
-                        | DatetimeProperty.SIN_HOUR
-                        | DatetimeProperty.COS_HOUR
-                    )
-
-                extraction_rec = FeatureExtractionRecommendation(
-                    column_name=col_name,
-                    description=f"Extract datetime features from '{col_name}' (Year, Month, DayOfWeek with cyclic encoding{', Hour with cyclic encoding' if DatetimeProperty.HOUR in properties else ''}).",
-                    properties=properties,
-                )
-                self._pipeline.append(extraction_rec)
-
-                # Remove conflicting NonInformativeRecommendation if present
-                self._remove_conflicting_non_informative(col_name)
+            # Priority A: Check for explicit User Instructions (Hints)
+            hint = self._column_hints.get(col)
+            if hint:
+                self._apply_column_hint(col, series, hint)
                 continue
 
-            if is_datetime or is_datetime_string:
-                continue
-
-            # 3. Check for boolean classification
-            if is_numeric and unique_count == 2 and col_name != target_column:
-                values = sorted(non_null_unique.tolist())
-                if values == [0.0, 1.0] or values == [0, 1]:
-                    rec = BooleanClassificationRecommendation(
-                        column_name=col_name,
-                        description=f"Column '{col_name}' should be treated as boolean.",
-                        values=values,
-                    )
-                    self._pipeline.append(rec)
-
-            # 3.5. Check for integer conversion (Float64 -> Int32/64)
-            if series.dtype == "float64":
-                if len(non_null_series) > 0:
-                    integer_mask = non_null_series % 1 == 0
-                    if integer_mask.all():
-                        # Use a helper to decide between INT32 or INT64
-                        target_depth = (
-                            BitDepth.INT32
-                            if (
-                                non_null_series.max() < 2e9
-                                and non_null_series.min() > -2e9
-                            )
-                            else BitDepth.INT64
-                        )
-
-                        rec = IntegerConversionRecommendation(
-                            column_name=col_name,
-                            description=f"Column '{col_name}' is float64 with only integer values; should be {target_depth.value}.",
-                            integer_count=int(integer_mask.sum()),
-                            target_depth=target_depth,
-                        )
-                        self._pipeline.append(rec)
-                        # If we found an integer conversion, skip the float check for this column
-                        continue
-
-            # 3.6. Check for decimal precision optimization
-            if max_decimal_places is not None and series.dtype == "float64":
-                col_max_decimal_places: int | None = None
-
-                if isinstance(max_decimal_places, dict):
-                    col_max_decimal_places = max_decimal_places.get(
-                        col_name, default_max_decimal_places
-                    )
-                else:
-                    col_max_decimal_places = max_decimal_places
-
-                if col_max_decimal_places is not None and "int64_conversion" not in [
-                    r.rec_type.name for r in self._pipeline if r.column_name == col_name
-                ]:
-                    if len(non_null_series) > 0:
-                        if non_null_min is None:
-                            non_null_min = non_null_series.min()
-                            non_null_max = non_null_series.max()
-
-                        rounded_series = non_null_series.round(col_max_decimal_places)
-                        can_convert_to_int = (
-                            col_max_decimal_places == 0
-                            and (rounded_series % 1 == 0).all()
-                        )
-
-                        min_val = (
-                            float(non_null_min)
-                            if non_null_min is not None
-                            else float("nan")
-                        )
-                        max_val = (
-                            float(non_null_max)
-                            if non_null_max is not None
-                            else float("nan")
-                        )
-
-                        rec = DecimalPrecisionRecommendation(
-                            column_name=col_name,
-                            description=f"Column '{col_name}' can have decimal precision optimized to {col_max_decimal_places} places.",
-                            max_decimal_places=col_max_decimal_places,
-                            min_value=min_val,
-                            max_value=max_val,
-                            convert_to_int=bool(can_convert_to_int),
-                        )
-                        self._pipeline.append(rec)
-
-            # 3.7.1. New: Check for Float32 downcasting
-            if series.dtype == "float64":
-                # If it's a true float and not already flagged for integer conversion
-                # We recommend Float32 for memory efficiency unless it's an excluded high-precision column
-                rec = FloatConversionRecommendation(
-                    column_name=col_name,
-                    description=f"Column '{col_name}' is float64; reducing to float32 can save 50% memory with negligible precision loss.",
-                    target_depth=BitDepth.FLOAT32,
-                )
-                self._pipeline.append(rec)
-
-            # 3.7.2 Check for non-numeric placeholder values
-            if series.dtype == "object":
-                if value_counts_cache is None:
-                    value_counts_cache = series.value_counts()
-
-                non_numeric_vals, non_numeric_cnt = _detect_non_numeric_values(
-                    non_null_unique, value_counts_cache
+            # Priority B: Automated Analysis (Skip if hints_only is True)
+            if not hints_only:
+                self._analyze_column_heuristics(
+                    col, series, unique_count, total_rows, config
                 )
 
-                if non_numeric_vals and len(non_numeric_vals) > 0:
-                    numeric_count = 0
-                    for val in non_null_unique:
-                        try:
-                            float(val)
-                            numeric_count += 1
-                        except (ValueError, TypeError):
-                            pass
+        # --- STAGE 2: Cross-Column Relationship Discovery ---
+        if not hints_only:
+            datetime_cols = self._identify_datetime_columns(df)
+            self._discover_cross_column_features(df, datetime_cols)
 
-                    if numeric_count > 0 and non_numeric_cnt > 0:
-                        rec = ValueReplacementRecommendation(
-                            column_name=col_name,
-                            description=f"Column '{col_name}' has non-numeric placeholder values that should be replaced.",
-                            non_numeric_values=non_numeric_vals,
-                            non_numeric_count=non_numeric_cnt,
-                        )
-                        self._pipeline.append(rec)
+        # --- STAGE 3: Strategy Refinement ---
+        self._refine_pipeline_strategies()
 
-            # 3.8. Check for categorical conversion (memory optimization)
-            # Exclusion keywords: monetary/count metrics that should remain numeric
-            excluded_keywords = (
-                "fee",
-                "surcharge",
-                "tax",
-                "amount",
-                "count",
-                "dist",
-                "price",
-                "total",
-                "sum",
-            )
-            col_name_lower = col_name.lower()
-            should_exclude_categorical = any(
-                keyword in col_name_lower for keyword in excluded_keywords
-            )
-
-            # For object columns: unique_count < len(series) / 2
-            if (
-                series.dtype == "object"
-                and col_name != target_column
-                and not should_exclude_categorical
-            ):
-                if unique_count < len(series) / 2 and unique_count >= 2:
-                    rec = CategoricalConversionRecommendation(
-                        column_name=col_name,
-                        description=f"Column '{col_name}' has {unique_count} unique categorical values; convert to categorical dtype for memory optimization.",
-                        unique_values=unique_count,
-                    )
-                    self._pipeline.append(rec)
-                    suggested_categorical_conversion = True
-                    categorical_conversion_cols.add(col_name)
-            if (
-                is_numeric
-                and col_name != target_column
-                and not should_exclude_categorical
-            ):
-                cardinality_ratio = unique_count / len(df)
-                if (
-                    unique_count < 500
-                    and cardinality_ratio < 0.05
-                    and unique_count >= 2
-                ):
-                    rec = CategoricalConversionRecommendation(
-                        column_name=col_name,
-                        description=f"Column '{col_name}' has {unique_count} unique values ({cardinality_ratio*100:.2f}% cardinality); convert to categorical dtype for memory optimization.",
-                        unique_values=unique_count,
-                    )
-                    self._pipeline.append(rec)
-                    suggested_categorical_conversion = True
-                    categorical_conversion_cols.add(col_name)
-            if not is_numeric and col_name != target_column:
-                # Skip encoding if categorical conversion suggested and allow_categorical_encoding is False
-                if (
-                    col_name in categorical_conversion_cols
-                    and not allow_categorical_encoding
-                ):
-                    pass  # Suppress encoding
-                elif unique_count == 2:
-                    description = f"Column '{col_name}' is binary categorical; recommend LabelEncoder."
-                    # Add note if also marked for categorical conversion
-                    if col_name in categorical_conversion_cols:
-                        description += (
-                            " [Note: Also suitable for categorical conversion]."
-                        )
-                    rec = EncodingRecommendation(
-                        column_name=col_name,
-                        description=description,
-                        encoder_type=EncodingStrategy.LABEL,
-                        unique_values=unique_count,
-                    )
-                    self._pipeline.append(rec)
-
-                elif 3 <= unique_count <= 10:
-                    description = f"Column '{col_name}' is multi-class categorical; recommend OneHotEncoder."
-                    # Add note if also marked for categorical conversion
-                    if col_name in categorical_conversion_cols:
-                        description += (
-                            " [Note: Also suitable for categorical conversion]."
-                        )
-                    rec = EncodingRecommendation(
-                        column_name=col_name,
-                        description=description,
-                        encoder_type=EncodingStrategy.ONEHOT,
-                        unique_values=unique_count,
-                    )
-                    self._pipeline.append(rec)
-
-            # 5. Check for outliers (skip if too few unique values)
-            if (
-                is_numeric
-                and unique_count >= 15
-                and not suggested_categorical_conversion
-            ):
-                mean_value = series.mean()
-                max_value = series.max()
-                min_value = series.min()
-
-                if max_value > mean_value * 2:
-                    # Calculate IQR for outlier detection
-                    q1 = series.quantile(0.25)
-                    q3 = series.quantile(0.75)
-                    iqr = q3 - q1
-
-                    # Define bounds for different outlier intensities
-                    # 1.5x IQR: mild outliers (traditional boxplot whiskers)
-                    clip_lower = q1 - 1.5 * iqr
-                    clip_upper = q3 + 1.5 * iqr
-
-                    # 3x IQR: extreme outliers
-                    nullify_lower = q1 - 3 * iqr
-                    nullify_upper = q3 + 3 * iqr
-
-                    # Check for extreme outliers (beyond 3x IQR) - suggest NULLIFY
-                    if min_value < nullify_lower or max_value > nullify_upper:
-                        rec_nullify = OutlierHandlingRecommendation(
-                            column_name=col_name,
-                            description=f"Column '{col_name}' has extreme outliers (beyond 3x IQR); recommend nullifying.",
-                            strategy=OutlierHandlingStrategy.NULLIFY,
-                            lower_bound=float(nullify_lower),
-                            upper_bound=float(nullify_upper),
-                        )
-                        self._pipeline.append(rec_nullify)
-
-                    # Check for moderate outliers (between 1.5x and 3x IQR) - suggest CLIP
-                    if min_value < clip_lower or max_value > clip_upper:
-                        rec_clip = OutlierHandlingRecommendation(
-                            column_name=col_name,
-                            description=f"Column '{col_name}' has moderate outliers (1.5x-3x IQR); recommend clipping.",
-                            strategy=OutlierHandlingStrategy.CLIP,
-                            lower_bound=float(clip_lower),
-                            upper_bound=float(clip_upper),
-                        )
-                        self._pipeline.append(rec_clip)
-
-                    # Also suggest outlier detection (for awareness if not cleaned)
-                    rec_detection = OutlierDetectionRecommendation(
-                        column_name=col_name,
-                        description=f"Column '{col_name}' has potential outliers (max={max_value:.2f}, mean={mean_value:.2f}).",
-                        strategy=OutlierStrategy.SCALING,
-                        max_value=max_value,
-                        mean_value=mean_value,
-                    )
-                    self._pipeline.append(rec_detection)
-
-            # 6. Check for class imbalance
-            if col_name == target_column and unique_count <= 2:
-                if value_counts_cache is None:
-                    value_counts_cache = series.value_counts()
-
-                max_class_percentage = (value_counts_cache.max() / total_rows) * 100
-
-                if max_class_percentage > 70:
-                    rec = ClassImbalanceRecommendation(
-                        column_name=col_name,
-                        description=f"Target variable '{col_name}' shows class imbalance ({max_class_percentage:.1f}% majority class).",
-                        majority_percentage=max_class_percentage,
-                        strategy=ImbalanceStrategy.CLASS_WEIGHT,
-                    )
-                    self._pipeline.append(rec)
-
-            # 7. Suggest binning
-            col_min_binning: int
-            if min_binning_unique_values is None:
-                col_min_binning = default_min_binning_unique_values
-            elif isinstance(min_binning_unique_values, dict):
-                col_min_binning = min_binning_unique_values.get(
-                    col_name, default_min_binning_unique_values
-                )
-            else:
-                col_min_binning = min_binning_unique_values
-
-            col_max_binning: int
-            if max_binning_unique_values is None:
-                col_max_binning = default_max_binning_unique_values
-            elif isinstance(max_binning_unique_values, dict):
-                col_max_binning = max_binning_unique_values.get(
-                    col_name, default_max_binning_unique_values
-                )
-            else:
-                col_max_binning = max_binning_unique_values
-
-            if (
-                is_numeric
-                and not suggested_categorical_conversion
-                and col_min_binning <= unique_count <= col_max_binning
-            ):
-                non_null_series = series.dropna()
-
-                if len(non_null_series) > 0:
-                    if non_null_min is None:
-                        non_null_min = non_null_series.min()
-                        non_null_max = non_null_series.max()
-
-                    col_min = non_null_min
-                    col_max = non_null_max
-
-                    if col_min < col_max:
-                        desc = series.describe()
-                        bins = [
-                            col_min - 0.1 * abs(col_max - col_min),
-                            desc["25%"],
-                            desc["50%"],
-                            desc["75%"],
-                            col_max + 0.1 * abs(col_max - col_min),
-                        ]
-                        labels = ["Very_Low", "Low", "Medium", "High", "Very_High"]
-
-                        rec = BinningRecommendation(
-                            column_name=col_name,
-                            description=f"Column '{col_name}' ({unique_count} unique values) could be binned into {len(labels)} categories for better feature representation.",
-                            bins=bins,
-                            labels=labels,
-                        )
-                        self._pipeline.append(rec)
-
-        # Post-processing: Refine missing value strategies based on categorical conversion and skewness
-        # - Use IMPUTE_MODE for columns qualifying for categorical conversion
-        # - Use IMPUTE_MEDIAN for skewed numeric columns
-        # - Otherwise, keep IMPUTE_MEAN for numeric
-        for rec in self._pipeline:
-            if rec.rec_type == RecommendationType.MISSING_VALUES and isinstance(
-                rec, MissingValuesRecommendation
-            ):
-                # Skip explicit actions
-                if rec.strategy in (
-                    MissingValueStrategy.DROP_ROWS,
-                    MissingValueStrategy.DROP_COLUMN,
-                    MissingValueStrategy.FILL_VALUE,
-                    MissingValueStrategy.LEAVE_AS_NA,
-                ):
-                    continue
-
-                col = rec.column_name
-                series = df[col]
-
-                if col in categorical_conversion_cols:
-                    rec.strategy = MissingValueStrategy.IMPUTE_MODE
-                    rec.description = (
-                        rec.description
-                        + " Using mode imputation due to categorical conversion."
-                    )
-                elif pd.api.types.is_numeric_dtype(series):
-                    skew = series.skew()
-                    skew_val = cast(float, skew)
-                    if not np.isnan(skew_val) and abs(skew_val) >= 0.75:
-                        rec.strategy = MissingValueStrategy.IMPUTE_MEDIAN
-                        rec.description = (
-                            rec.description
-                            + " Using median imputation due to skewed distribution."
-                        )
-                    else:
-                        rec.strategy = MissingValueStrategy.IMPUTE_MEAN
-
-        # Check for non-informative columns last, only if no other recommendations exist
-        # This allows columns to be considered useful before marking them as non-informative
-        for col_name in df.columns:
-            if self._has_recommendations_for_column(col_name):
-                continue
-
-            series = df[col_name]
-            unique_count = series.nunique()
-            total_rows = len(df)
-            is_numeric = pd.api.types.is_numeric_dtype(series)
-            is_datetime = pd.api.types.is_datetime64_any_dtype(series)
-
-            # Skip datetime columns (already handled above)
-            if is_datetime:
-                continue
-
-            # Check for string datetime columns
-            is_datetime_string = False
-            if series.dtype == "object":
-                try:
-                    if is_string_datetime(series):
-                        is_datetime_string = True
-                except Exception:
-                    pass
-
-            if is_datetime_string:
-                continue
-
-            # Mark column as non-informative if it meets criteria
-            if unique_count == total_rows:
-                rec = NonInformativeRecommendation(
-                    column_name=col_name,
-                    description=f"Column '{col_name}' has unique value for each row.",
-                    reason="Unique count equals row count",
-                )
-                self._pipeline.append(rec)
-            elif not is_numeric and unique_count > total_rows * 0.25:
-                rec = NonInformativeRecommendation(
-                    column_name=col_name,
-                    description=f"Column '{col_name}' has high cardinality ({unique_count} unique values).",
-                    reason="High cardinality object type",
-                )
-                self._pipeline.append(rec)
-
-        # Process hints for columns not present in the DataFrame (e.g., aggregate outputs)
-        if hints:
-            for hint_col, hint in hints.items():
-                if hint_col in df.columns:
-                    continue  # already handled in main loop
-                if (
-                    hint.logical_type == ColumnHintType.AGGREGATE
-                    and hint.agg_columns
-                    and hint.agg_op
-                ):
-                    out_name = None
-                    if hint.output_names:
-                        out_name = hint.output_names.get(
-                            "aggregate"
-                        ) or hint.output_names.get("output")
-                    if not out_name:
-                        out_name = f"{hint_col}_{hint.agg_op}"
-
-                    rec_agg = AggregationRecommendation(
-                        column_name=(
-                            hint.agg_columns[0] if hint.agg_columns else hint_col
-                        ),
-                        description=f"Aggregate columns {hint.agg_columns} with '{hint.agg_op}' into '{out_name}' [User Hint Applied]",
-                        agg_columns=hint.agg_columns,
-                        agg_op=hint.agg_op,
-                        output_column=out_name,
-                        decimal_places=hint.decimal_places,
-                        rounding_mode=(
-                            hint.rounding_mode
-                            if hint.rounding_mode
-                            else RoundingMode.NEAREST
-                        ),
-                        scale_factor=hint.scale_factor,
-                    )
-                    rec_agg.is_locked = True
-                    self._pipeline.append(rec_agg)
-
-        # If only hints should be used, keep only hint-driven recs and record warnings
-        if hints_only:
-            # Retain only locked recommendations created from hints
-            self._pipeline = [
-                rec for rec in self._pipeline if getattr(rec, "is_locked", False)
-            ]
-
-            hinted_cols = set(hints.keys()) if hints else set()
-            pipeline_cols = {rec.column_name for rec in self._pipeline}
-            df_cols = set(df.columns)
-            # Exclude ignored columns from unhandled warnings
-            ignored_cols = (
-                {col for col, hint in hints.items() if hint.is_ignored}
-                if hints
-                else set()
-            )
-            unhandled = sorted(df_cols - hinted_cols - pipeline_cols - ignored_cols)
-            if unhandled:
-                self._summary_warnings.append(
-                    f"Columns without hint or recommendation: {', '.join(unhandled)}"
-                )
-            return
-
-        # Stage 1: Identify all datetime columns (existing + post-conversion)
-        # Pass existing_datetime_cols to avoid redundant type checks
-        datetime_columns = self._identify_datetime_columns(df, existing_datetime_cols)
-
-        if len(datetime_columns) >= 2:
-            # Stage 2: Pair datetime columns with statistical and semantic checks
-            datetime_cols_list = list(datetime_columns)
-
-            for i, col_a in enumerate(datetime_cols_list):
-                for col_b in datetime_cols_list[i + 1 :]:
-                    # Skip same column
-                    if col_a == col_b:
-                        continue
-
-                    # Get positive delta ratio (arrow of time)
-                    positive_ratio_ab = self._check_positive_delta_ratio(
-                        df, col_a, col_b
-                    )
-                    positive_ratio_ba = self._check_positive_delta_ratio(
-                        df, col_b, col_a
-                    )
-
-                    # Determine direction: which has higher positive delta ratio
-                    if positive_ratio_ab > positive_ratio_ba:
-                        start_col, end_col = col_a, col_b
-                        positive_ratio = positive_ratio_ab
-                    elif positive_ratio_ba > positive_ratio_ab:
-                        start_col, end_col = col_b, col_a
-                        positive_ratio = positive_ratio_ba
-                    else:
-                        # No clear direction or both very low
-                        continue
-
-                    # Stage 3: Apply confidence threshold
-                    # Statistical: Check for strong arrow of time (95%+ positive deltas)
-                    statistical_confidence = positive_ratio >= 0.95
-
-                    # Semantic: Check for temporal anchor keywords
-                    semantic_score = self._semantic_similarity(start_col, end_col)
-                    semantic_confidence = semantic_score >= 0.6
-
-                    # Magnitude: Check if durations are within reasonable range
-                    reasonable_magnitude = self._check_reasonable_duration_magnitude(
-                        df, start_col, end_col
-                    )
-
-                    # Create recommendation if confidence thresholds are met
-                    if (
-                        statistical_confidence or semantic_confidence
-                    ) and reasonable_magnitude:
-                        duration_col_name = self._generate_duration_column_name(
-                            start_col, end_col
-                        )
-
-                        rec = DatetimeDurationRecommendation(
-                            column_name=start_col,  # Use start column as primary reference
-                            description=(
-                                f"Calculate duration from '{start_col}' to '{end_col}'. "
-                                f"Statistical confidence: {positive_ratio:.0%} positive deltas. "
-                                f"Semantic match score: {semantic_score:.1f}."
-                            ),
-                            start_column=start_col,
-                            end_column=end_col,
-                            unit="seconds",
-                            output_column=duration_col_name,
-                        )
-                        self._pipeline.append(rec)
+        try:
+            self._validate_pipeline(df)
+        except ValueError as e:
+            self._summary_warnings.append(f"Pipeline Integrity Warning: {str(e)}")
 
     def clear(self) -> None:
-        """Clear all recommendations from the pipeline."""
+        """
+        Removes all recommendations, resetting the pipeline to an empty state.
+
+        This is useful when you want to re-run an analysis on the same
+        DataFrame with entirely new parameters without instantiating a
+        new Manager.
+        """
         self._pipeline.clear()
 
     def _remove_conflicting_non_informative(self, column_name: str) -> None:
         """
-        Remove any NonInformativeRecommendation for the given column.
+        Prunes 'NON_INFORMATIVE' recommendations for a specific column.
 
-        Used to resolve conflicts when a column scheduled for feature extraction
-        also has a NonInformativeRecommendation. Feature extraction takes precedence
-        since it enables value creation from the column.
+        This utility resolves conflicts when the engine identifies a useful
+        transformation (such as datetime feature extraction) for a column
+        previously flagged for removal. It enforces a "value creation"
+        precedence, ensuring that potential features are not lost to
+        earlier "drop" heuristics.
 
-        Args:
-            column_name: The column name to check for conflicting recommendations
+        Parameters
+        ----------
+        column_name : str
+            The name of the column to reconcile.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This method rebuilds the internal pipeline in-place, filtering out
+        any recommendations of type `RecommendationType.NON_INFORMATIVE`
+        that target the specified column.
         """
+        # Rebuild the pipeline using a list comprehension to filter out
+        # the specific 'drop' recommendation for this column.
         self._pipeline = [
             rec
             for rec in self._pipeline
@@ -3794,110 +3579,147 @@ class RecommendationManager:
 
     def _has_recommendations_for_column(self, column_name: str) -> bool:
         """
-        Check if the pipeline has any recommendations for a given column.
+        Checks if any recommendations are currently targeted at a specific column.
 
-        Args:
-            column_name: The column name to check
+        Parameters
+        ----------
+        column_name : str
+            The name of the column to look up.
 
         Returns:
-            True if any recommendations exist for the column, False otherwise
+        -------
+        True if one or more recommendations exist for the column.
         """
         return any(rec.column_name == column_name for rec in self._pipeline)
 
     def __len__(self) -> int:
-        """Return the number of recommendations in the pipeline."""
+        """Returns the total count of recommendations in the pipeline."""
         return len(self._pipeline)
 
     def __iter__(self):
-        """Iterate over recommendations in the pipeline."""
+        """Allows for direct iteration over the pipeline (e.g., in a for-loop)."""
         return iter(self._pipeline)
 
     def __getitem__(self, index: int) -> Recommendation:
-        """Get a recommendation by index."""
+        """
+        Retrieves a recommendation by its positional index in the pipeline.
+
+        Parameters
+        ----------
+        index : int
+            The integer index of the recommendation.
+
+        Returns:
+        -------
+        The Recommendation object at that position.
+        """
         return self._pipeline[index]
 
     def get_by_id(self, rec_id: str) -> Recommendation | None:
         """
-        Retrieve a recommendation by its ID.
+        Retrieves a recommendation from the pipeline by its unique ID.
 
-        Args:
-            rec_id: The ID of the recommendation to retrieve
+        Parameters
+        ----------
+        rec_id : str
+            The unique identifier to search for.
 
         Returns:
-            The Recommendation object if found, None otherwise
+        -------
+        The matching Recommendation object, or None if not found.
         """
-        for rec in self._pipeline:
-            if rec.id == rec_id:
-                return rec
-        return None
+        return next((r for r in self._pipeline if r.id == rec_id), None)
 
     def get_by_alias(self, alias: str) -> Recommendation | None:
         """
-        Retrieve a recommendation by its alias.
+        Retrieves a recommendation using its user-defined alias.
 
-        Args:
-            alias: The alias of the recommendation to retrieve
+        Parameters
+        ----------
+        alias : str
+            The string alias to search for.
 
         Returns:
-            The Recommendation object if found, None otherwise
+        -------
+        The matching Recommendation object, or None if not found.
         """
         if alias is None:
             return None
-        for rec in self._pipeline:
-            if rec.alias == alias:
-                return rec
-        return None
+        return next((r for r in self._pipeline if r.alias == alias), None)
 
     def enable_by_id(self, rec_id: str, ok_if_none: bool = False) -> None:
         """
-        Enable a recommendation by its ID.
+        Activates a recommendation to ensure its execution during apply().
 
-        Args:
-            rec_id: The ID of the recommendation to enable
-            ok_if_none: If False, raise when the ID is not found
+        Sets the `enabled` attribute of a specific recommendation to True.
+        Once enabled, the recommendation will be processed according to its
+        assigned priority level when the pipeline is executed.
 
-        Raises:
-            ValueError: If the recommendation is not found and ok_if_none is False
+        Parameters
+        ----------
+        rec_id : str
+            The unique identifier of the recommendation to activate.
+        ok_if_none : bool, default False
+            If True, the method returns silently if the ID is not found.
+            If False, a ValueError is raised.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If `rec_id` is not found in the pipeline and `ok_if_none` is False.
         """
         rec = self.get_by_id(rec_id)
-        if rec is not None:
+        if rec:
             rec.enabled = True
-        else:
-            if not ok_if_none:
-                raise ValueError(f"Rec ID not found: {rec_id}")
+        elif not ok_if_none:
+            raise ValueError(f"Enable failed: Recommendation ID '{rec_id}' not found.")
 
     def disable_by_id(self, rec_id: str, ok_if_none: bool = False) -> None:
         """
-        Disable a recommendation by its ID.
+        Deactivates a recommendation, skipping it during apply().
 
-        Args:
-            rec_id: The ID of the recommendation to disable
-            ok_if_none: If False, raise when the ID is not found
+        Parameters
+        ----------
+        rec_id : str
+            The unique identifier of the recommendation to activate.
+        ok_if_none : bool, default False
+            If True, the method returns silently if the ID is not found.
+            If False, a ValueError is raised.
 
-        Raises:
-            ValueError: If the recommendation is not found and ok_if_none is False
+        Raises
+        ------
+        ValueError
+            If `rec_id` is not found in the pipeline and `ok_if_none` is False.
         """
         rec = self.get_by_id(rec_id)
-        if rec is not None:
+        if rec:
             rec.enabled = False
-        else:
-            if not ok_if_none:
-                raise ValueError(f"Rec ID not found: {rec_id}")
+        elif not ok_if_none:
+            raise ValueError(f"Disable failed: Recommendation ID '{rec_id}' not found.")
 
     def toggle_enabled_by_id(self, rec_id: str, ok_if_none: bool = False) -> None:
         """
-        Toggle enabled state for a recommendation by its ID.
+        Flips the 'enabled' state of a specific recommendation.
 
-        Args:
-            rec_id: The ID of the recommendation to toggle
-            ok_if_none: If False, raise when the ID is not found
+        Parameters
+        ----------
+        rec_id : str
+            The unique identifier of the recommendation to activate.
+        ok_if_none : bool, default False
+            If True, the method returns silently if the ID is not found.
+            If False, a ValueError is raised.
 
-        Raises:
-            ValueError: If the recommendation is not found and ok_if_none is False
+        Raises
+        ------
+        ValueError
+            If `rec_id` is not found in the pipeline and `ok_if_none` is False.
         """
         rec = self.get_by_id(rec_id)
-        if rec is not None:
+        if rec:
             rec.enabled = not rec.enabled
-        else:
-            if not ok_if_none:
-                raise ValueError(f"Rec ID not found: {rec_id}")
+        elif not ok_if_none:
+            raise ValueError(f"Toggle failed: Recommendation ID '{rec_id}' not found.")

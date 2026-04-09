@@ -3,66 +3,99 @@
 ## Running Tests
 
 ### Install test dependencies
+
+Ensure the library is installed in editable mode within your virtual environment to ensure tests run against your local code:
+
 ```bash
 pip install -e ".[test]"
 ```
 
 ### Run all tests
+
 ```bash
 pytest
 ```
 
 ### Run tests with coverage report
+
 ```bash
 pytest --cov=src/dsr_data_tools --cov-report=html
 ```
 
-### Run specific test file
+### Run specific test files
+
+## General analysis and metadata tests
+
 ```bash
 pytest tests/test_analysis.py
 ```
 
-### Run tests matching a pattern
+## Recommendation engine orchestration
+
 ```bash
-pytest -k "test_analysis"
+pytest tests/test_manager.py
 ```
 
-### Run tests with verbose output
+## Specific recommendation logic
+
 ```bash
-pytest -v
+pytest tests/recommendations/test_conversions.py
+```
+
+## Debugging & Output
+
+To disable output capture and see print() statements (essential for debugging mapping or environment issues):
+
+```bash
+pytest -s
+```
+
+To run with verbose output and match a specific test pattern:
+
+```bash
+pytest -v -k "boolean_classification"
 ```
 
 ## Test Structure
 
-Tests are organized by module:
-- `tests/test_analysis.py` - Tests for data analysis functions
+Tests are organized by functional area:
+
+- tests/test_analysis.py: Tests for automated data analysis and metadata heuristics.
+- tests/test_manager.py: Tests for the RecommendationManager orchestration and execution priority.
+- tests/recommendations/: Tests for specific transformation logic:
+  - test_conversions.py: Datetime, Boolean, and Numeric casting logic.
+  - test_features.py: Feature interaction, extraction, and duration logic.
 
 ## Writing Tests
 
-All test files should:
-1. Start with `test_` prefix
-2. Use pytest conventions
-3. Include docstrings explaining what is being tested
-4. Use fixtures from `conftest.py` when needed
+All test files should follow these standards:
+
+1. Naming: Files must start with the test_ prefix.
+2. Conventions: Use standard pytest assertions.
+3. Documentation: Include NumPy-style docstrings explaining what is being tested.
+4. Fixtures: Utilize shared fixtures from conftest.py where appropriate.
 
 Example:
+
 ```python
 import pytest
 import pandas as pd
+from dsr_data_tools.recommendations import BooleanClassificationRecommendation
 
-@pytest.fixture
-def sample_data():
-    """Create sample data for testing."""
-    return pd.DataFrame({'col': [1, 2, 3]})
-
-def test_analysis_function(sample_data):
-    """Test the analysis function with sample data."""
-    assert len(sample_data) > 0
-```
+def test_boolean_mapping():
+    """Verify that 'Y'/'N' strings are correctly mapped to booleans."""
+    df = pd.DataFrame({"active": ["Y", "N"]})
+    rec = BooleanClassificationRecommendation(
+        column_name="active", 
+        values=["Y", "N"]
+    )
+    result = rec.apply(df)
+    assert result["active"].tolist() == [True, False]```
 
 ## Coverage Reports
 
-After running tests with coverage, view the HTML report:
+After running tests with coverage, view the HTML report to identify untested logic branches:
+
 ```bash
 open htmlcov/index.html
 ```
