@@ -1,5 +1,8 @@
 from dsr_data_tools.enums import RecommendationType
-from dsr_data_tools.recommendations import IntegerConversionRecommendation
+from dsr_data_tools.recommendations import (
+    IntegerConversionRecommendation,
+    RecommendationManager,
+)
 
 
 def test_recommendation_ids_are_stable():
@@ -47,3 +50,37 @@ def test_manager_priority_sorting():
     # Verify priority sorting (Drops should be higher priority than Bool Classification)
     assert manager._pipeline[0].rec_type == RecommendationType.NON_INFORMATIVE
     assert manager._pipeline[1].rec_type == RecommendationType.BOOLEAN_CLASSIFICATION
+
+
+def test_recommendation_to_dict_serialization():
+    """Verifies that Recommendation objects serialize Enums to strings."""
+    rec = IntegerConversionRecommendation(
+        column_name="col_a", description="desc", integer_count=5
+    )
+
+    data = rec.to_dict()
+
+    # Assert base attributes and Enum names
+    assert data["column_name"] == "col_a"
+    assert data["rec_type"] == "INT_CONVERSION"
+
+    # Assert internal-only fields are excluded
+    assert "_locked" not in data
+    assert "integer_count" in data
+
+
+def test_manager_save_to_yaml(tmp_path):
+    """Verifies the manager correctly writes the pipeline to a YAML file."""
+    filepath = tmp_path / "recommendations.yaml"
+    rec = IntegerConversionRecommendation(
+        column_name="age", description="Convert to int", integer_count=10
+    )
+
+    manager = RecommendationManager(recommendations=[rec])
+    manager.save_to_yaml(filepath)
+
+    # Check file exists and has content
+    assert filepath.exists()
+    content = filepath.read_text()
+    assert "age" in content
+    assert "INT_CONVERSION" in content

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Type, cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -30,32 +30,65 @@ class DataframeColumn:
         The name of the column.
     non_null_count : int
         Number of non-null values in the column.
-    data_type : Type
+    data_type : Any
         The pandas data type of the column.
     """
 
     def __init__(self, name: str, non_null_count: int, data_type: Any):
+        """
+        Initialize a DataframeColumn instance.
+
+        Parameters
+        ----------
+        name : str
+            The name of the column.
+        non_null_count : int
+            Number of non-null values in the column.
+        data_type : Any
+            The pandas data type of the column.
+        """
         self._name = name
         self._non_null_count = non_null_count
         self._data_type = data_type
 
     @property
     def name(self) -> str:
-        """Return the column name."""
+        """
+        Return the column name.
+
+        Returns
+        -------
+        str
+            The name of the column.
+        """
         return self._name
 
     @property
     def non_null_count(self) -> int:
-        """Return the number of non-null values."""
+        """
+        Return the number of non-null values.
+
+        Returns
+        -------
+        int
+            The count of non-null entries in the column.
+        """
         return self._non_null_count
 
     @property
     def data_type(self) -> Any:
-        """Return the pandas data type."""
+        """
+        Return the pandas data type.
+
+        Returns
+        -------
+        Any
+            The data type (dtype) of the column.
+        """
         return self._data_type
 
     @staticmethod
-    def dfc_list_from_df(df: pd.DataFrame) -> list[DataframeColumn]:
+    def dfc_list_from_df(df: pd.DataFrame) -> list["DataframeColumn"]:
         """
         Create a list of DataframeColumn objects from a DataFrame.
 
@@ -67,16 +100,12 @@ class DataframeColumn:
         Returns
         -------
         list[DataframeColumn]
-            List of DataframeColumn objects, one per column.
+            List of DataframeColumn objects, one per column, containing name,
+            non-null count, and dtype information.
         """
-        # counts is a Series: index=column_name, value=non_null_count
         counts = df.count()
-
-        # dtypes is a Series: index=column_name, value=dtype
         dtypes = df.dtypes
 
-        # Using zip avoids indexing into the Series with a variable,
-        # which satisfies the type checker's overload requirements.
         return [
             DataframeColumn(name=str(name), non_null_count=int(count), data_type=dtype)
             for name, count, dtype in zip(counts.index, counts.values, dtypes.values)
@@ -89,9 +118,26 @@ class DataframeInfo:
 
     Provides a summary of DataFrame characteristics including row counts,
     duplicate detection, and detailed column information.
+
+    Attributes
+    ----------
+    row_count : int
+        The total number of rows in the DataFrame.
+    duplicate_row_count : int
+        The number of rows identified as duplicates.
+    columns : list[DataframeColumn]
+        A list of DataframeColumn objects containing metadata for each column.
     """
 
     def __init__(self, df: pd.DataFrame):
+        """
+        Initialize DataframeInfo by analyzing the provided DataFrame.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to analyze for structural and content information.
+        """
         self._row_count = len(df)
         # Casting to int as .sum() on boolean series can sometimes return np.int64
         self._duplicate_row_count = int(df.duplicated().sum())
@@ -99,17 +145,38 @@ class DataframeInfo:
 
     @property
     def row_count(self) -> int:
-        """Return the total number of rows."""
+        """
+        Return the total number of rows.
+
+        Returns
+        -------
+        int
+            The row count of the DataFrame.
+        """
         return self._row_count
 
     @property
     def duplicate_row_count(self) -> int:
-        """Return the count of duplicate rows."""
+        """
+        Return the count of duplicate rows.
+
+        Returns
+        -------
+        int
+            The number of duplicate rows found.
+        """
         return self._duplicate_row_count
 
     @property
     def columns(self) -> list[DataframeColumn]:
-        """Return the list of DataframeColumn metadata objects."""
+        """
+        Return the list of DataframeColumn metadata objects.
+
+        Returns
+        -------
+        list[DataframeColumn]
+            A list containing metadata for each column in the DataFrame.
+        """
         return self._columns
 
     def info(self) -> None:
@@ -118,6 +185,10 @@ class DataframeInfo:
 
         Calculates dynamic padding to ensure the table remains aligned
         regardless of column name lengths.
+
+        Returns
+        -------
+        None
         """
         print(f"Rows: {self.row_count}")
         print(f"Duplicate rows: {self.duplicate_row_count}")
@@ -128,13 +199,11 @@ class DataframeInfo:
             return
 
         # --- Dynamic Alignment ---
-        # Calculate the width needed for the 'Column' name column
         max_col_name = max(len(c.name) for c in self.columns)
         name_width = max(max_col_name, 15)  # Minimum width of 15
         count_width = 12
         type_width = 15
 
-        # Header
         header = (
             f"{'Column':<{name_width}} "
             f"{'Non-null':>{count_width}}   "
@@ -143,10 +212,7 @@ class DataframeInfo:
         print(header)
         print("-" * len(header))
 
-        # Rows
         for c in self.columns:
-            # Note: c.data_type might be a dtype object,
-            # so we access .name for a clean string like 'int64'
             dtype_name = getattr(c.data_type, "name", str(c.data_type))
 
             print(
@@ -160,15 +226,26 @@ def analyze_column_data(series: pd.Series, dataframe_column: DataframeColumn) ->
     """
     Analyze and print detailed statistics for a single DataFrame column.
 
-    Displays type information, null counts, and logical composition (e.g.,
-    detecting 'integers in disguise' within float columns).
+    Displays type information, null counts, and logical composition, such as
+    detecting 'integers in disguise' within float columns or numeric strings
+    within object columns.
 
     Parameters
     ----------
     series : pd.Series
         The data series to analyze.
     dataframe_column : DataframeColumn
-        Metadata about the column.
+        Metadata object containing the name and data type of the column.
+
+    Returns
+    -------
+    None
+        This function prints results directly to stdout.
+
+    Raises
+    ------
+    AttributeError
+        If the dataframe_column object is missing required attributes.
     """
     total_len = len(series)
     non_null = series.dropna()
@@ -190,7 +267,6 @@ def analyze_column_data(series: pd.Series, dataframe_column: DataframeColumn) ->
     ]
 
     # --- 2. Numeric Statistics ---
-    # Use pandas utility for broader compatibility (covers float64, float32, etc.)
     if pd.api.types.is_numeric_dtype(series):
         if not non_null.empty:
             lines.append(f"Min value:          {series.min()}")
@@ -205,13 +281,12 @@ def analyze_column_data(series: pd.Series, dataframe_column: DataframeColumn) ->
 
     # --- 4. Object-Specific: Numeric String Discovery ---
     if pd.api.types.is_object_dtype(series) and not non_null.empty:
-        # isnumeric() only catches whole numbers; we check for digit strings
         numeric_count = series.astype(str).str.isnumeric().sum()
-        # Note: 'strings.is_float_string' is an external helper we assume is imported
         try:
+            # Note: is_float_string is an external helper dependency
             float_str_count = series.apply(is_float_string).sum()
-        except (ImportError, AttributeError):
-            float_str_count = 0  # Fallback if helper is missing
+        except (NameError, ImportError, AttributeError):
+            float_str_count = 0
 
         lines.append(f"Numeric strings:    {numeric_count}")
         if float_str_count > 0:
@@ -240,20 +315,48 @@ def analyze_dataset(
 
     Displays overall DataFrame characteristics followed by detailed per-column
     statistics. Optionally generates an optimization pipeline via RecommendationManager.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The dataset to be analyzed.
+    target_column : str | None, optional
+        The name of the label or target column for supervised learning context.
+    hints : dict[str, ColumnHint] | None, optional
+        Manual overrides for column types to guide recommendation logic.
+    hints_only : bool, default False
+        If True, only generates recommendations for columns provided in `hints`.
+    generate_recs : bool, default False
+        Whether to instantiate a RecommendationManager and generate cleaning suggestions.
+    max_decimal_places : int | dict[str, int] | None, optional
+        Constraint for rounding float columns. Can be a global int or per-column dict.
+    default_max_decimal_places : int | None, optional
+        The default rounding precision if not specified in `max_decimal_places`.
+    normalize_column_names : bool, default False
+        If True, converts all column headers to snake_case before analysis.
+    min_binning_unique_values : int | dict[str, int] | None, optional
+        Minimum unique values required to consider a column for binning.
+    default_min_binning_unique_values : int, default 10
+        Default threshold for minimum binning unique values.
+    max_binning_unique_values : int | dict[str, int] | None, optional
+        Maximum unique values allowed to consider a column for binning.
+    default_max_binning_unique_values : int, default 1000
+        Default threshold for maximum binning unique values.
+
+    Returns
+    -------
+    tuple[DataframeInfo, RecommendationManager | None]
+        A tuple containing the structural metadata (DataframeInfo) and the
+        recommendation engine (RecommendationManager), if generated.
     """
     from dsr_data_tools.recommendations import RecommendationManager
 
     # 1. Column Normalization
-    # If we normalize, we do it at the very start so all subsequent objects
-    # (Info, Hints, Recommendations) refer to the same snake_case names.
     if normalize_column_names:
         df = df.copy()
         df.columns = [to_snake_case(str(col)) for col in df.columns]
         if target_column:
             target_column = to_snake_case(target_column)
-
-        # Note: If hints are passed, their keys might also need normalization
-        # depending on user expectation. For now, we assume the df modification is enough.
 
     # 2. Global Metadata Analysis
     df_info = DataframeInfo(df)
@@ -277,7 +380,6 @@ def analyze_dataset(
         )
 
     # 4. Detailed Per-Column Analysis
-    # Iterating directly over df_info.columns is cleaner than range(n)
     for col_metadata in df_info.columns:
         analyze_column_data(df[col_metadata.name], col_metadata)
 
@@ -303,6 +405,27 @@ def generate_interaction_recommendations(
 
     Analyzes numeric columns to suggest meaningful interactions based on
     Status-Impact (MI), Resource Density (Correlation), and Product Utilization.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The dataset to analyze for potential feature interactions.
+    target_column : str | None, optional
+        The name of the target variable, used to calculate Mutual Information
+        and impact scores.
+    top_n : int | None, default 20
+        The maximum number of high-priority interactions to return. If None,
+        all identified interactions are returned.
+    exclude_columns : list[str] | None, optional
+        List of specific column names to ignore during interaction analysis.
+    random_state : int | None, default 42
+        Seed for reproducibility in statistical sampling and MI calculations.
+
+    Returns
+    -------
+    list[FeatureInteractionRecommendation]
+        A sorted list of recommended interactions, ranked by their
+        calculated priority score.
     """
     interactions: list[FeatureInteractionRecommendation] = []
 
@@ -364,6 +487,31 @@ def _find_status_impact_interactions(
     is_clf: bool,
     seed: int | None,
 ) -> list[FeatureInteractionRecommendation]:
+    """
+    Identify potential Status-Impact interactions between binary and continuous columns.
+
+    Uses Mutual Information (MI) to find binary columns that strongly relate to the target,
+    then pairs them with high-variance continuous columns to suggest segmentation features.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The source dataset for calculating variance and distributions.
+    cols : list[str]
+        The list of numeric columns available for analysis.
+    y : pd.Series | None
+        The target variable series used for Mutual Information scoring.
+    is_clf : bool
+        Whether the analysis context is a classification task (True) or regression (False).
+    seed : int | None
+        Random seed for reproducibility in MI scoring calculations.
+
+    Returns
+    -------
+    list[FeatureInteractionRecommendation]
+        A list of suggested interactions where a continuous feature is multiplied
+        by a binary status feature.
+    """
     recs = []
     binary_cols = [c for c in cols if df[c].nunique() == 2]
     if not binary_cols:
@@ -413,7 +561,28 @@ def _find_status_impact_interactions(
 def _find_resource_density_interactions(
     df: pd.DataFrame, cols: list[str]
 ) -> list[FeatureInteractionRecommendation]:
+    """
+    Identify potential Resource Density interactions using correlation analysis.
+
+    Finds highly correlated continuous columns and suggests ratio-based
+    interactions (division), provided the denominator meets sparsity
+    requirements to avoid mathematical instability.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The source dataset for correlation and sparsity calculations.
+    cols : list[str]
+        The list of numeric columns available for analysis.
+
+    Returns
+    -------
+    list[FeatureInteractionRecommendation]
+        A list of suggested ratio interactions where one continuous feature
+        is divided by another.
+    """
     recs = []
+    # Identify continuous columns with sufficient cardinality
     cont_cols = [c for c in cols if df[c].nunique() > 20]
     if len(cont_cols) < 2:
         return []
@@ -423,6 +592,8 @@ def _find_resource_density_interactions(
         for col2 in cont_cols[i + 1 :]:
             val: Any = corr_matrix.at[col1, col2]
             corr = float(val)
+
+            # High correlation suggests redundancy or a strong ratio relationship
             if corr > 0.7:
                 # Sparsity check to avoid zero-division issues
                 if (df[col2] != 0).mean() > 0.9:
@@ -447,12 +618,40 @@ def _find_utilization_interactions(
     is_clf: bool,
     seed: int | None,
 ) -> list[FeatureInteractionRecommendation]:
+    """
+    Identify potential Product Utilization interactions (rates) between discrete and continuous columns.
+
+    Suggests division interactions where a discrete 'count' column is normalized
+    by a continuous 'duration' or 'resource' column. If a target is provided,
+    the interaction is scored based on its Mutual Information (MI) with the target.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The source dataset for calculating interactions and distributions.
+    cols : list[str]
+        The list of numeric columns available for analysis.
+    y : pd.Series | None
+        The target variable series used to score the predictive power of the suggested interaction.
+    is_clf : bool
+        Whether the analysis context is a classification task (True) or regression (False).
+    seed : int | None
+        Random seed for reproducibility in MI scoring calculations.
+
+    Returns
+    -------
+    list[FeatureInteractionRecommendation]
+        A list of suggested rate-based interactions representing product or resource utilization.
+    """
     recs = []
+    # Discrete columns are defined by cardinality between 3 and 20
     discrete_cols = [c for c in cols if 2 < df[c].nunique() <= 20]
+    # Duration columns are higher-cardinality continuous features
     duration_cols = [c for c in cols if df[c].nunique() > 20]
 
     for count_col in discrete_cols:
         for dur_col in duration_cols:
+            # Sparsity check to ensure mathematical stability for division
             if (df[dur_col] != 0).mean() < 0.9:
                 continue
 

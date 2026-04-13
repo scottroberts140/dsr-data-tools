@@ -2,6 +2,8 @@
 dsr_data_tools: Generic data handling utilities for data splitting and analysis.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from dsr_data_tools.analysis import (
     DataframeColumn,
     DataframeInfo,
@@ -9,40 +11,40 @@ from dsr_data_tools.analysis import (
     analyze_dataset,
     generate_interaction_recommendations,
 )
-from dsr_data_tools.recommendations import (
-    RecommendationManager,
-    Recommendation,
-    NonInformativeRecommendation,
-    MissingValuesRecommendation,
-    EncodingRecommendation,
-    ClassImbalanceRecommendation,
-    OutlierDetectionRecommendation,
-    OutlierHandlingRecommendation,
-    CategoricalConversionRecommendation,
-    BooleanClassificationRecommendation,
-    BinningRecommendation,
-    IntegerConversionRecommendation,
-    FloatConversionRecommendation,
-    DecimalPrecisionRecommendation,
-    ValueReplacementRecommendation,
-    FeatureInteractionRecommendation,
-    DatetimeConversionRecommendation,
-    FeatureExtractionRecommendation,
-    DatetimeDurationRecommendation,
-    ColumnHint,
-    AggregationRecommendation,
-)
 from dsr_data_tools.enums import (
-    RecommendationType,
+    BitDepth,
+    ColumnHintType,
     EncodingStrategy,
-    MissingValueStrategy,
-    OutlierStrategy,
-    OutlierHandlingStrategy,
     ImbalanceStrategy,
     InteractionType,
-    ColumnHintType,
+    MissingValueStrategy,
+    OutlierHandlingStrategy,
+    OutlierStrategy,
+    RecommendationType,
     RoundingMode,
-    BitDepth,
+)
+from dsr_data_tools.recommendations import (
+    AggregationRecommendation,
+    BinningRecommendation,
+    BooleanClassificationRecommendation,
+    CategoricalConversionRecommendation,
+    ClassImbalanceRecommendation,
+    ColumnHint,
+    DatetimeConversionRecommendation,
+    DatetimeDurationRecommendation,
+    DecimalPrecisionRecommendation,
+    EncodingRecommendation,
+    FeatureExtractionRecommendation,
+    FeatureInteractionRecommendation,
+    FloatConversionRecommendation,
+    IntegerConversionRecommendation,
+    MissingValuesRecommendation,
+    NonInformativeRecommendation,
+    OutlierDetectionRecommendation,
+    OutlierHandlingRecommendation,
+    Recommendation,
+    RecommendationManager,
+    ValueReplacementRecommendation,
 )
 
 __all__ = [
@@ -82,6 +84,10 @@ __all__ = [
     "ColumnHintType",
     "RoundingMode",
     "BitDepth",
+    "__version__",
 ]
 
-__version__ = "1.1.0"
+try:
+    __version__ = version("dsr-data-tools")
+except PackageNotFoundError:
+    __version__ = "unknown"

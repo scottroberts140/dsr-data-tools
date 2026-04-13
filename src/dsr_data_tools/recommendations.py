@@ -4,9 +4,11 @@ import hashlib
 import json
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any, Iterable, Union, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, cast
+
+from dsr_files.yaml_handler import save_yaml
 
 if TYPE_CHECKING:
     from dsr_data_tools.recommendations import RecommendationManager
@@ -33,7 +35,9 @@ def _generate_recommendation_id() -> str:
     """
     Generate a unique, short identifier for a recommendation instance.
 
-    Returns:
+    Returns
+    -------
+    str
         A string ID prefixed with 'rec_' followed by 8 random hex characters.
     """
     return f"rec_{uuid.uuid4().hex[:8]}"
@@ -46,16 +50,22 @@ def _detect_non_numeric_values(
     Identify non-numeric string placeholders in a candidate numeric series.
 
     Iterates through unique values to find strings that cannot be cast to float.
-    This is used to find sentinel values like 'N/A', 'tbd', or 'unknown' in
-    otherwise numeric columns.
+    Used to find sentinel values (e.g., 'N/A', 'tbd') in otherwise numeric
+    columns.
 
-    Args:
-        non_null_unique: Array of unique non-null values from the series.
-        value_counts: Frequency map of values in the series.
+    Parameters
+    ----------
+    non_null_unique : np.ndarray
+        Array of unique non-null values from the series.
+    value_counts : pd.Series
+        Frequency map of values in the series.
 
-    Returns:
-        - A list of identified non-numeric placeholder strings.
-        - The total sum of occurrences (frequency) for these placeholders.
+    Returns
+    -------
+    list of str
+        Identified non-numeric placeholder strings.
+    int
+        The total sum of occurrences (frequency) for these placeholders.
     """
     non_numeric_values: list[str] = []
     non_numeric_count: int = 0
@@ -88,19 +98,38 @@ class Recommendation(ABC):
     It supports deterministic ID generation, allowing recommendations to be
     tracked and persisted across multiple analysis sessions.
 
-    Attributes:
-        column_name: The target column for the transformation.
-        description: A human-readable summary of what this change achieves.
-        id: A deterministic 8-character hex ID (e.g., 'rec_a1b2c3d4').
-        enabled: If False, the RecommendationManager will skip this during `apply()`.
-        alias: An optional user-defined label for display purposes.
-        is_locked: True if this was generated from a User Hint (protected from auto-deletion).
+    Parameters
+    ----------
+    column_name : str
+        The target column for the transformation.
+    description : str
+        A human-readable summary of what this change achieves.
+    enabled : bool, default True
+        If False, the RecommendationManager will skip this during `apply()`.
+    alias : str, optional
+        An optional user-defined label for display purposes.
+    is_locked : bool, default False
+        True if this was generated from a User Hint (protected from auto-deletion).
+
+    Attributes
+    ----------
+    id : str
+        A deterministic 8-character hex ID (e.g., 'rec_a1b2c3d4').
+    _locked : bool
+        Internal flag indicating if identity-defining fields are read-only.
     """
 
     @property
     @abstractmethod
     def rec_type(self) -> RecommendationType:
-        """The categorical type of the recommendation (e.g., TYPE_CONVERSION)."""
+        """
+        The categorical type of the recommendation (e.g., TYPE_CONVERSION).
+
+        Returns
+        -------
+        RecommendationType
+            The specific enum category of this recommendation.
+        """
         pass
 
     column_name: str
@@ -115,10 +144,18 @@ class Recommendation(ABC):
         """
         Enforces read-only constraints on core identity fields after initialization.
 
-        Raises:
-            AttributeError: If attempting to modify 'column_name' or 'id' on a locked instance.
+        Parameters
+        ----------
+        name : str
+            The name of the attribute to modify.
+        value : Any
+            The new value to assign to the attribute.
+
+        Raises
+        ------
+        AttributeError
+            If attempting to modify 'column_name' or 'id' on a locked instance.
         """
-        # We allow setting _locked itself, and we allow changes if _locked is False
         if getattr(self, "_locked", False) and name in {"column_name", "id"}:
             raise AttributeError(
                 f"Modification Error: '{name}' is part of the recommendation's "
@@ -135,9 +172,13 @@ class Recommendation(ABC):
         Serializes the core attributes that define the uniqueness of this recommendation.
 
         Excludes volatile state like 'enabled' or UI-only fields like 'alias'.
+
+        Returns
+        -------
+        dict[str, Any]
+            A dictionary of fields used for stable ID generation.
         """
         data = asdict(self)
-        # Remove fields that do not contribute to identity
         ignored_fields = {
             "id",
             "_locked",
@@ -154,24 +195,56 @@ class Recommendation(ABC):
         """
         Generates a deterministic SHA1 hash based on the class and its attributes.
 
-        Returns:
+        Returns
+        -------
+        str
             A string in the format 'rec_XXXXXXXX'.
         """
         payload = {"class": self.__class__.__name__, "data": self._stable_id_payload()}
-        # sort_keys ensures that {a:1, b:2} and {b:2, a:1} produce the same hash
         json_str = json.dumps(payload, sort_keys=True, default=str)
         hash_val = hashlib.sha1(json_str.encode("utf-8")).hexdigest()
         return f"rec_{hash_val[:8]}"
 
     @abstractmethod
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Executes the transformation on the provided DataFrame."""
+        """
+        Executes the transformation on the provided DataFrame.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to be transformed.
+
+        Returns
+        -------
+        pd.DataFrame
+            The transformed DataFrame.
+        """
         pass
 
     @abstractmethod
     def info(self) -> None:
         """Prints a developer/user-friendly summary of the recommendation."""
         pass
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Serializes the recommendation to a dictionary for external persistence.
+
+        Captures all dataclass fields, including subclass-specific attributes,
+        ensuring they are converted to YAML-safe primitives when processed
+        by the library handler.
+
+        Returns
+        -------
+        dict[str, Any]
+            A dictionary representation of the recommendation, including the
+            string-name of its `rec_type`.
+        """
+        data = asdict(self)
+        data["rec_type"] = self.rec_type.name
+        data.pop("_locked", None)
+        return data
 
 
 @dataclass
@@ -183,12 +256,24 @@ class NonInformativeRecommendation(Recommendation):
     100% missing data, or high-cardinality identifiers (like UUIDs) that
     don't contribute to machine learning patterns.
 
-    Attributes:
-        reason: The specific diagnostic finding (e.g., 'Constant value', 'Unique IDs').
+    Parameters
+    ----------
+    reason : str, default ""
+        The specific diagnostic finding (e.g., 'Constant value', 'Unique IDs').
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.NON_INFORMATIVE.
+        """
         return RecommendationType.NON_INFORMATIVE
 
     reason: str = ""
@@ -197,7 +282,26 @@ class NonInformativeRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "NonInformativeRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        NonInformativeRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a NonInformativeRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -217,6 +321,16 @@ class NonInformativeRecommendation(Recommendation):
         Removes the target column from the DataFrame.
 
         Uses 'errors=ignore' to ensure idempotency if the column was already removed.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame from which the column should be removed.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame without the target column.
         """
         return df.drop(columns=[self.column_name], errors="ignore")
 
@@ -241,15 +355,30 @@ class MissingValuesRecommendation(Recommendation):
     fit for their domain—whether that's statistical imputation (mean/median/mode),
     constant filling, or row/column removal.
 
-    Attributes:
-        missing_count: Absolute number of nulls detected.
-        missing_percentage: Null density (0-100%).
-        strategy: The chosen MissingValueStrategy (EDITABLE).
-        fill_value: The specific value used if strategy is 'FILL_VALUE' (EDITABLE).
+    Parameters
+    ----------
+    missing_count : int, default 0
+        Absolute number of nulls detected in the column.
+    missing_percentage : float, default 0.0
+        Null density represented as a percentage (0-100%).
+    strategy : MissingValueStrategy, default MissingValueStrategy.IMPUTE_MEAN
+        The chosen imputation or removal strategy (EDITABLE).
+    fill_value : str, int, float, or None, default None
+        The specific value used if the strategy is set to 'FILL_VALUE' (EDITABLE).
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.MISSING_VALUES.
+        """
         return RecommendationType.MISSING_VALUES
 
     missing_count: int = 0
@@ -261,7 +390,26 @@ class MissingValuesRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "MissingValuesRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        MissingValuesRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a MissingValuesRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -272,6 +420,7 @@ class MissingValuesRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -279,7 +428,19 @@ class MissingValuesRecommendation(Recommendation):
         """
         Applies the selected strategy to the dataset.
 
-        Note: If a numeric strategy (mean/median) is selected for a non-numeric
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to be transformed.
+
+        Returns
+        -------
+        pd.DataFrame
+            The transformed DataFrame.
+
+        Notes
+        -----
+        If a numeric strategy (mean/median) is selected for a non-numeric
         column, the logic automatically falls back to mode-based imputation.
         """
         if self.column_name not in df.columns:
@@ -315,7 +476,19 @@ class MissingValuesRecommendation(Recommendation):
         return df
 
     def _get_mode(self, series: pd.Series) -> Any:
-        """Helper to get the first mode value or a 'Unknown' fallback."""
+        """
+        Helper to get the first mode value or a fallback value.
+
+        Parameters
+        ----------
+        series : pd.Series
+            The data series to analyze.
+
+        Returns
+        -------
+        Any
+            The first mode found, "Unknown" for object dtypes if empty, or None.
+        """
         modes = series.mode()
         if not modes.empty:
             return modes[0]
@@ -336,7 +509,14 @@ class MissingValuesRecommendation(Recommendation):
         print(f"    Action: {self._get_action_description()}")
 
     def _get_action_description(self) -> str:
-        """Generates a human-readable summary of the chosen strategy."""
+        """
+        Generates a human-readable summary of the chosen strategy.
+
+        Returns
+        -------
+        str
+            A descriptive string mapping the current strategy to a natural language action.
+        """
         descriptions = {
             MissingValueStrategy.DROP_ROWS: f"Drop {self.missing_count} rows with missing values",
             MissingValueStrategy.DROP_COLUMN: f"Remove column '{self.column_name}'",
@@ -358,14 +538,26 @@ class EncodingRecommendation(Recommendation):
     mathematical models. This class supports One-Hot Encoding (binary columns),
     Label Encoding (integers), or Categorical Dtype (memory optimization).
 
-    Attributes:
-        encoder_type: The chosen EncodingStrategy (EDITABLE).
-        unique_values: Cardinality of the column, used to estimate the impact
-            of One-Hot encoding.
+    Parameters
+    ----------
+    encoder_type : EncodingStrategy, default EncodingStrategy.ONEHOT
+        The chosen EncodingStrategy (EDITABLE).
+    unique_values : int, default 0
+        Cardinality of the column, used to estimate the impact of One-Hot encoding.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.ENCODING.
+        """
         return RecommendationType.ENCODING
 
     encoder_type: EncodingStrategy = EncodingStrategy.ONEHOT
@@ -375,7 +567,26 @@ class EncodingRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "EncodingRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        EncodingRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not an EncodingRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -386,6 +597,7 @@ class EncodingRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -393,8 +605,20 @@ class EncodingRecommendation(Recommendation):
         """
         Executes the encoding transformation.
 
-        Note: Label and Ordinal strategies preserve null values as NaN/None.
-        One-Hot encoding generates new columns and removes the original.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to be transformed.
+
+        Returns
+        -------
+        pd.DataFrame
+            The transformed DataFrame.
+
+        Notes
+        -----
+        - Label and Ordinal strategies preserve null values as NaN/None.
+        - One-Hot encoding generates new columns and removes the original.
         """
         if self.column_name not in df.columns:
             return df
@@ -446,7 +670,14 @@ class EncodingRecommendation(Recommendation):
         print(f"    Action: {self._get_action_description()}")
 
     def _get_action_description(self) -> str:
-        """Generates a human-readable summary of the encoding action."""
+        """
+        Generates a human-readable summary of the encoding action.
+
+        Returns
+        -------
+        str
+            A descriptive string mapping the current strategy to a natural language action.
+        """
         desc_map = {
             EncodingStrategy.CATEGORICAL: f"Convert to Categorical dtype (reduces memory usage)",
             EncodingStrategy.ONEHOT: f"Expand into {self.unique_values} binary features",
@@ -466,13 +697,26 @@ class ClassImbalanceRecommendation(Recommendation):
     or synthetic generation like SMOTE) to be implemented during the model
     training phase.
 
-    Attributes:
-        majority_percentage: The proportion of the dataset held by the dominant class.
-        strategy: The ImbalanceStrategy (e.g., SMOTE, UNDERSAMPLE) recommended (EDITABLE).
+    Parameters
+    ----------
+    majority_percentage : float, default 0.0
+        The proportion of the dataset held by the dominant class (0-100).
+    strategy : ImbalanceStrategy, default ImbalanceStrategy.SMOTE
+        The resampling strategy suggested for the training pipeline (EDITABLE).
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.CLASS_IMBALANCE.
+        """
         return RecommendationType.CLASS_IMBALANCE
 
     majority_percentage: float = 0.0
@@ -482,7 +726,26 @@ class ClassImbalanceRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "ClassImbalanceRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        ClassImbalanceRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a ClassImbalanceRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -493,6 +756,7 @@ class ClassImbalanceRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -500,9 +764,19 @@ class ClassImbalanceRecommendation(Recommendation):
         """
         Returns the DataFrame unchanged.
 
-        Reason: Resampling should be performed within cross-validation loops
-        to prevent data leakage. This recommendation serves as a configuration
-        flag for the model training pipeline.
+        Resampling should be performed within cross-validation loops to prevent
+        data leakage. This recommendation serves as a configuration flag for
+        the model training pipeline rather than a pre-processing step.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The input DataFrame.
+
+        Returns
+        -------
+        pd.DataFrame
+            The original DataFrame, unmodified.
         """
         return df
 
@@ -517,7 +791,14 @@ class ClassImbalanceRecommendation(Recommendation):
         print(f"    Note: This action is applied during training, not pre-processing.")
 
     def _get_action_description(self) -> str:
-        """Describes the training-time configuration."""
+        """
+        Describes the training-time configuration.
+
+        Returns
+        -------
+        str
+            A string describing the suggested resampling technique for the target column.
+        """
         return f"Configure training pipeline to use {self.strategy.value} on '{self.column_name}'"
 
 
@@ -530,14 +811,28 @@ class OutlierDetectionRecommendation(Recommendation):
     This recommendation offers strategies to either squish extreme values
     through robust scaling or remove them using the Interquartile Range (IQR) method.
 
-    Attributes:
-        strategy: The chosen OutlierStrategy (EDITABLE).
-        max_value: The highest value detected during analysis.
-        mean_value: The average value detected during analysis.
+    Parameters
+    ----------
+    strategy : OutlierStrategy, default OutlierStrategy.SCALING
+        The chosen OutlierStrategy (EDITABLE).
+    max_value : float, default 0.0
+        The highest value detected during analysis.
+    mean_value : float, default 0.0
+        The average value detected during analysis.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.OUTLIER_DETECTION.
+        """
         return RecommendationType.OUTLIER_DETECTION
 
     strategy: OutlierStrategy = OutlierStrategy.SCALING
@@ -548,7 +843,26 @@ class OutlierDetectionRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "OutlierDetectionRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        OutlierDetectionRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not an OutlierDetectionRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -559,6 +873,7 @@ class OutlierDetectionRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -566,7 +881,19 @@ class OutlierDetectionRecommendation(Recommendation):
         """
         Applies scaling or row-removal based on the selected strategy.
 
-        Warning: The 'REMOVE' strategy will filter the DataFrame and reset the index.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to be transformed.
+
+        Returns
+        -------
+        pd.DataFrame
+            The transformed DataFrame.
+
+        Warnings
+        --------
+        The 'REMOVE' strategy will filter the DataFrame and reset the index.
         """
         if self.column_name not in df.columns:
             return df
@@ -574,7 +901,6 @@ class OutlierDetectionRecommendation(Recommendation):
         if self.strategy in {OutlierStrategy.SCALING, OutlierStrategy.ROBUST_SCALER}:
             from sklearn.preprocessing import RobustScaler, StandardScaler
 
-            # Select the appropriate scaler
             scaler = (
                 RobustScaler()
                 if self.strategy == OutlierStrategy.ROBUST_SCALER
@@ -583,7 +909,6 @@ class OutlierDetectionRecommendation(Recommendation):
 
             mask = df[self.column_name].notna()
             if mask.any():
-                # fit_transform expects a 2D array [[val1], [val2], ...]
                 scaled_values = scaler.fit_transform(df.loc[mask, [self.column_name]])
                 df[self.column_name] = df[self.column_name].astype("float64")
                 df.loc[mask, self.column_name] = scaled_values.flatten()
@@ -595,7 +920,6 @@ class OutlierDetectionRecommendation(Recommendation):
             lower = q1 - 1.5 * iqr
             upper = q3 + 1.5 * iqr
 
-            # Filter and reset index to maintain a clean DataFrame state
             df = df[(df[self.column_name] >= lower) & (df[self.column_name] <= upper)]
             df = df.reset_index(drop=True)
 
@@ -612,7 +936,14 @@ class OutlierDetectionRecommendation(Recommendation):
         print(f"    Action: {self._get_action_description()}")
 
     def _get_action_description(self) -> str:
-        """Generates a summary of the handling method."""
+        """
+        Generates a summary of the handling method.
+
+        Returns
+        -------
+        str
+            A descriptive string mapping the current strategy to a natural language action.
+        """
         if self.strategy == OutlierStrategy.REMOVE:
             return "Remove rows outside 1.5x IQR (filtering)"
         if self.strategy == OutlierStrategy.ROBUST_SCALER:
@@ -629,14 +960,28 @@ class OutlierHandlingRecommendation(Recommendation):
     targets values outside of user-defined or detected bounds. This is useful for
     removing sensor errors, unrealistic financial entries, or extreme noise.
 
-    Attributes:
-        strategy: NULLIFY (set to NaN) or CLIP (cap at the bound). (EDITABLE)
-        lower_bound: Values below this are treated as outliers. (EDITABLE)
-        upper_bound: Values above this are treated as outliers. (EDITABLE)
+    Parameters
+    ----------
+    strategy : OutlierHandlingStrategy, default OutlierHandlingStrategy.CLIP
+        The chosen handling method: NULLIFY (set to NaN) or CLIP (cap at the bound) (EDITABLE).
+    lower_bound : float, default 0.0
+        Values below this threshold are treated as outliers (EDITABLE).
+    upper_bound : float, default 0.0
+        Values above this threshold are treated as outliers (EDITABLE).
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.OUTLIER_HANDLING.
+        """
         return RecommendationType.OUTLIER_HANDLING
 
     strategy: OutlierHandlingStrategy = OutlierHandlingStrategy.CLIP
@@ -647,7 +992,26 @@ class OutlierHandlingRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "OutlierHandlingRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        OutlierHandlingRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not an OutlierHandlingRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -658,6 +1022,7 @@ class OutlierHandlingRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -665,7 +1030,20 @@ class OutlierHandlingRecommendation(Recommendation):
         """
         Executes outlier cleaning using vectorized operations.
 
-        Note: NULLIFY will cast integer columns to float64 to accommodate NaN.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to be cleaned.
+
+        Returns
+        -------
+        pd.DataFrame
+            The cleaned DataFrame.
+
+        Notes
+        -----
+        The NULLIFY strategy will cast integer columns to float64 to accommodate
+        NaN values.
         """
         if self.column_name not in df.columns:
             return df
@@ -698,7 +1076,15 @@ class OutlierHandlingRecommendation(Recommendation):
         print(f"    Action: {self._get_action_description()}")
 
     def _get_action_description(self) -> str:
-        """Generates a summary of how extreme values will be treated."""
+        """
+        Generates a summary of how extreme values will be treated.
+
+        Returns
+        -------
+        str
+            A descriptive string mapping the chosen strategy and bounds to a
+            natural language action.
+        """
         bounds_str = f"[{self.lower_bound:.2f}, {self.upper_bound:.2f}]"
         if self.strategy == OutlierHandlingStrategy.NULLIFY:
             return f"Set values outside {bounds_str} to NaN"
@@ -715,12 +1101,24 @@ class CategoricalConversionRecommendation(Recommendation):
     pointing to a mapping table, which also speeds up operations like sorting
     and grouping.
 
-    Attributes:
-        unique_values: The number of distinct categories found in the column.
+    Parameters
+    ----------
+    unique_values : int, default 0
+        The number of distinct categories found in the column.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.CATEGORICAL_CONVERSION.
+        """
         return RecommendationType.CATEGORICAL_CONVERSION
 
     unique_values: int = 0
@@ -729,7 +1127,26 @@ class CategoricalConversionRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "CategoricalConversionRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        CategoricalConversionRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a CategoricalConversionRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -740,6 +1157,7 @@ class CategoricalConversionRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -747,7 +1165,16 @@ class CategoricalConversionRecommendation(Recommendation):
         """
         Converts the target column to 'category' dtype.
 
-        Returns the original DataFrame if the column is missing.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the column to be converted.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the column converted to categorical dtype, or the
+            original DataFrame if the column is missing.
         """
         if self.column_name not in df.columns:
             return df
@@ -778,12 +1205,25 @@ class BooleanClassificationRecommendation(Recommendation):
     and suggests converting them to a proper boolean type for better
     semantic clarity and memory efficiency.
 
-    Attributes:
-        values: The two unique values identified in the column.
+    Parameters
+    ----------
+    values : list of Any, optional
+        The two unique values identified in the column that will be mapped to
+        True and False.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.BOOLEAN_CLASSIFICATION.
+        """
         return RecommendationType.BOOLEAN_CLASSIFICATION
 
     values: list[Any] = field(default_factory=list)
@@ -792,7 +1232,26 @@ class BooleanClassificationRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "BooleanClassificationRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        BooleanClassificationRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a BooleanClassificationRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -803,18 +1262,34 @@ class BooleanClassificationRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Standardizes indicators and converts the column to boolean.
+
+        Uses a predefined set of 'True' indicators (e.g., 'Y', 'YES', '1') to
+        determine mapping direction. Vectorized replacement ensures that
+        unmatched values do not introduce NaNs.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the column to be transformed.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the target column converted to boolean dtype.
+        """
         if self.column_name not in df.columns or len(self.values) != 2:
             return df
 
         # 1. Standardize indicators
-        # We look for common 'True' patterns to decide the mapping direction
         TRUE_INDICATORS = {"Y", "YES", "1", "TRUE", "ON", "T", "ACTIVE"}
 
-        # Clean the detected values for comparison
         val_a_str = str(self.values[0]).strip().upper()
         val_b_str = str(self.values[1]).strip().upper()
 
@@ -827,9 +1302,11 @@ class BooleanClassificationRecommendation(Recommendation):
             mapping = {self.values[0]: False, self.values[1]: True}
 
         # 3. Vectorized replacement
-        # .replace() is better than .map() here because it won't introduce
-        # NaNs for values that don't match the dictionary keys.
-        df[self.column_name] = df[self.column_name].replace(mapping).astype(bool)
+        # We explicitly call infer_objects(copy=False) to resolve the silent downcasting
+        # deprecation warning in Pandas 3.0+.
+        df[self.column_name] = (
+            df[self.column_name].replace(mapping).infer_objects().astype(bool)
+        )
 
         return df
 
@@ -854,13 +1331,26 @@ class BinningRecommendation(Recommendation):
     values into intervals (e.g., [0-10, 11-20]) and automatically expands
     the result into multiple one-hot encoded binary features.
 
-    Attributes:
-        bins: List of numeric edges for the bins (e.g., [0, 10, 20, 100]).
-        labels: Descriptive names for the resulting categories (e.g., ['Low', 'Med', 'High']).
+    Parameters
+    ----------
+    bins : list of float, optional
+        List of numeric edges for the bins (e.g., [0, 10, 20, 100]).
+    labels : list of str, optional
+        Descriptive names for the resulting categories (e.g., ['Low', 'Med', 'High']).
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.BINNING.
+        """
         return RecommendationType.BINNING
 
     bins: list[float] = field(default_factory=list)
@@ -870,7 +1360,26 @@ class BinningRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "BinningRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        BinningRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a BinningRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -881,6 +1390,7 @@ class BinningRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -888,7 +1398,22 @@ class BinningRecommendation(Recommendation):
         """
         Applies range-based binning followed by one-hot encoding.
 
-        Returns the original DataFrame if binning fails or the column is missing.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the numeric column to be binned.
+
+        Returns
+        -------
+        pd.DataFrame
+            The transformed DataFrame with new binary features, or the original
+            DataFrame if the operation fails or the column is missing.
+
+        Notes
+        -----
+        This process involves two steps:
+        1. Discretization of data into categories using `pd.cut`.
+        2. Expansion of categories into binary features using `pd.get_dummies`.
         """
         if self.column_name not in df.columns:
             return df
@@ -948,13 +1473,26 @@ class IntegerConversionRecommendation(Recommendation):
     to a specific bit-depth (e.g., int16, int32), memory usage is reduced
     and data semantics are clarified.
 
-    Attributes:
-        target_depth: The specific bit-depth (BitDepth enum) for the conversion.
-        integer_count: The number of rows currently containing whole numbers.
+    Parameters
+    ----------
+    target_depth : BitDepth, default BitDepth.INT32
+        The specific bit-depth (BitDepth enum) for the conversion.
+    integer_count : int, default 0
+        The number of rows currently containing whole numbers.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.INT_CONVERSION.
+        """
         return RecommendationType.INT_CONVERSION
 
     target_depth: BitDepth = BitDepth.INT32
@@ -964,7 +1502,26 @@ class IntegerConversionRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "IntegerConversionRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        IntegerConversionRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not an IntegerConversionRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -975,6 +1532,7 @@ class IntegerConversionRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -984,6 +1542,16 @@ class IntegerConversionRecommendation(Recommendation):
 
         Automatically detects NaNs and upgrades to Pandas' 'Nullable' integer
         types (e.g., 'Int32' instead of 'int32') to prevent casting back to float.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the column to be converted.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the column converted to the target integer type.
         """
         if self.column_name not in df.columns:
             return df
@@ -1031,12 +1599,24 @@ class FloatConversionRecommendation(Recommendation):
     usage in large datasets. While float64 offers higher precision, float32 is
     typically sufficient for the majority of machine learning use cases.
 
-    Attributes:
-        target_depth: The specific bit-depth (BitDepth enum) for the conversion.
+    Parameters
+    ----------
+    target_depth : BitDepth, default BitDepth.FLOAT32
+        The specific bit-depth (BitDepth enum) for the conversion.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.FLOAT_CONVERSION.
+        """
         return RecommendationType.FLOAT_CONVERSION
 
     target_depth: BitDepth = BitDepth.FLOAT32
@@ -1045,7 +1625,26 @@ class FloatConversionRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "FloatConversionRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        FloatConversionRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a FloatConversionRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1056,6 +1655,7 @@ class FloatConversionRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -1064,12 +1664,21 @@ class FloatConversionRecommendation(Recommendation):
         Converts the column to the target floating-point bit-depth.
 
         Standard floating-point types (float32, float64) natively support NaNs.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the column to be converted.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the column converted to the target floating-point type.
         """
         if self.column_name not in df.columns:
             return df
 
         try:
-            # Cast to Any to satisfy static type checkers regarding overloads
             from typing import Any, cast
 
             df[self.column_name] = df[self.column_name].astype(
@@ -1103,16 +1712,34 @@ class DecimalPrecisionRecommendation(Recommendation):
     to an integer type. For remaining floats, it suggests downcasting to float32
     to reduce memory usage.
 
-    Attributes:
-        max_decimal_places: Maximum decimal digits to retain. (EDITABLE)
-        min_value/max_value: Reference bounds for the column's data.
-        convert_to_int: If True, attempts integer conversion after rounding.
-        rounding_mode: The algorithm (NEAREST, BANKERS, etc.) used. (EDITABLE)
-        scale_factor: Multiplier applied before the rounding step.
+    Parameters
+    ----------
+    max_decimal_places : int, default 0
+        Maximum decimal digits to retain (EDITABLE).
+    min_value : float, default 0.0
+        Reference lower bound for the column's data.
+    max_value : float, default 0.0
+        Reference upper bound for the column's data.
+    convert_to_int : bool, default False
+        If True, attempts integer conversion after rounding if no decimals remain.
+    rounding_mode : RoundingMode, default RoundingMode.NEAREST
+        The algorithm used for rounding (e.g., BANKERS, UP, DOWN) (EDITABLE).
+    scale_factor : float, optional
+        Multiplier applied to the data before the rounding step.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.DECIMAL_PRECISION_OPTIMIZATION.
+        """
         return RecommendationType.DECIMAL_PRECISION_OPTIMIZATION
 
     max_decimal_places: int = 0
@@ -1126,7 +1753,26 @@ class DecimalPrecisionRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "DecimalPrecisionRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        DecimalPrecisionRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a DecimalPrecisionRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1137,12 +1783,31 @@ class DecimalPrecisionRecommendation(Recommendation):
         return rec
 
     def __post_init__(self) -> None:
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Executes scaling, rounding, and conditional type-downcasting.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the column to be optimized.
+
+        Returns
+        -------
+        pd.DataFrame
+            The transformed DataFrame with updated precision and optimized storage types.
+
+        Notes
+        -----
+        The method follows a three-step pipeline:
+        1. Multiplies by `scale_factor` if provided.
+        2. Applies rounding based on the selected `rounding_mode`.
+        3. Attempts to downcast to 'Int64' (if `convert_to_int` is True) or 'float32'
+           to reduce memory footprint.
         """
         if self.column_name not in df.columns:
             return df
@@ -1170,7 +1835,6 @@ class DecimalPrecisionRecommendation(Recommendation):
             # 3. Type Optimization
             non_null = series.dropna()
 
-            # Check if we should/can convert to Integer
             if (
                 self.convert_to_int
                 and not non_null.empty
@@ -1178,8 +1842,6 @@ class DecimalPrecisionRecommendation(Recommendation):
             ):
                 dtype = "Int64" if series.isna().any() else "int64"
                 df[self.column_name] = series.astype(cast(Any, dtype))
-
-            # Otherwise, downcast to float32 if precision is low enough
             elif self.max_decimal_places <= 6:
                 df[self.column_name] = series.astype(cast(Any, "float32"))
             else:
@@ -1222,15 +1884,28 @@ class ValueReplacementRecommendation(Recommendation):
     string-based placeholders (e.g., 'n/a', 'tbd', 'unknown'). It allows for
     batch replacement to prepare the column for numeric casting.
 
-    Attributes:
-        non_numeric_values: A list of specific strings identified as placeholders.
-        non_numeric_count: The total occurrences of these placeholders in the column.
-        replacement_value: The value to insert in place of the strings. Defaults to
-            `np.nan`, but can be modified by the user (e.g., to 0 or -1).
+    Parameters
+    ----------
+    non_numeric_values : list of str, optional
+        A list of specific strings identified as placeholders.
+    non_numeric_count : int, default 0
+        The total occurrences of these placeholders in the column.
+    replacement_value : float or str, default np.nan
+        The value to insert in place of the strings (EDITABLE).
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.VALUE_REPLACEMENT.
+        """
         return RecommendationType.VALUE_REPLACEMENT
 
     non_numeric_values: list[str] = field(default_factory=list)
@@ -1242,10 +1917,24 @@ class ValueReplacementRecommendation(Recommendation):
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "ValueReplacementRecommendation | None":
         """
-        Retrieves and validates a recommendation of this specific type from the manager.
+        Retrieve and validate a recommendation of this type from the manager.
 
-        Raises:
-            TypeError: If the recommendation exists but is not a ValueReplacementRecommendation.
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        ValueReplacementRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a ValueReplacementRecommendation.
         """
         rec = manager.get_by_id(rec_id)
         if rec is None:
@@ -1257,6 +1946,7 @@ class ValueReplacementRecommendation(Recommendation):
         return rec
 
     def __post_init__(self):
+        """Computes the stable identity and freezes core fields."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -1264,9 +1954,21 @@ class ValueReplacementRecommendation(Recommendation):
         """
         Executes the replacement on the target column.
 
-        Note: This method uses a single pass replacement. It does not automatically
-        cast the column to a numeric type, as other recommendations in the pipeline
-        may handle type conversion.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the column to be cleaned.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with placeholders replaced by the target value.
+
+        Notes
+        -----
+        This method uses a single-pass replacement for optimization. It does not
+        automatically cast the column to a numeric type, as other recommendations
+        in the pipeline typically handle type conversion.
         """
         if not self.non_numeric_values:
             return df
@@ -1291,7 +1993,14 @@ class ValueReplacementRecommendation(Recommendation):
         print(f"    Action: {self._get_action_description()}")
 
     def _get_action_description(self) -> str:
-        """Generates a human-readable summary of the replacement action."""
+        """
+        Generates a human-readable summary of the replacement action.
+
+        Returns
+        -------
+        str
+            A descriptive string mapping the placeholders to the replacement target.
+        """
         values_str = "', '".join(map(str, self.non_numeric_values))
         target = (
             "NaN" if pd.isna(self.replacement_value) else f"'{self.replacement_value}'"
@@ -1308,17 +2017,35 @@ class FeatureInteractionRecommendation(Recommendation):
     unit price by quantity or dividing revenue by headcount—to create
     higher-order features for modeling.
 
-    Attributes:
-        column_name_2: The secondary column used in the interaction.
-        interaction_type: The domain-specific category of the interaction.
-        operation: The mathematical operator ('*' or '/').
-        rationale: A human-readable explanation of the feature's potential value.
-        derived_name: The name of the new column (default auto-generated).
-        priority_score: Magnitude of the statistical signal (0.0 to 1.0).
+    Parameters
+    ----------
+    column_name_2 : str, default ""
+        The secondary column used in the interaction.
+    interaction_type : InteractionType, default InteractionType.STATUS_IMPACT
+        The domain-specific category of the interaction.
+    operation : str, default "*"
+        The mathematical operator ('*' or '/').
+    rationale : str, default ""
+        A human-readable explanation of the feature's potential value.
+    derived_name : str, default ""
+        The name of the new column. If empty, it is auto-generated during
+        initialization.
+    priority_score : float, default 0.0
+        Magnitude of the statistical signal (0.0 to 1.0).
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.FEATURE_INTERACTION.
+        """
         return RecommendationType.FEATURE_INTERACTION
 
     column_name_2: str = ""
@@ -1332,7 +2059,26 @@ class FeatureInteractionRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "FeatureInteractionRecommendation | None":
-        """Retrieve the recommendation by ID, ensuring correct subclass typing."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        FeatureInteractionRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a FeatureInteractionRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1356,7 +2102,27 @@ class FeatureInteractionRecommendation(Recommendation):
         """
         Calculates the interaction and appends the new column to the DataFrame.
 
-        Handles division by zero by converting denominators of 0 to NaN.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the columns to be combined.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the newly engineered feature column appended.
+
+        Raises
+        ------
+        KeyError
+            If one or both columns are missing from the input DataFrame.
+        ValueError
+            If an unsupported mathematical operator is provided.
+
+        Notes
+        -----
+        The method handles division by zero by converting denominators of 0
+        to NaN to prevent calculation errors.
         """
         if self.column_name not in df.columns or self.column_name_2 not in df.columns:
             raise KeyError(
@@ -1367,7 +2133,6 @@ class FeatureInteractionRecommendation(Recommendation):
         if self.operation == "*":
             df[self.derived_name] = df[self.column_name] * df[self.column_name_2]
         elif self.operation == "/":
-            # Guard against ZeroDivisionError by coercing 0 to NaN
             denominator = df[self.column_name_2].replace(0, np.nan)
             df[self.derived_name] = df[self.column_name] / denominator
         else:
@@ -1397,16 +2162,28 @@ class DatetimeConversionRecommendation(Recommendation):
     Recommendation to convert a string or object column into a datetime object.
 
     Proper datetime typing enables time-series analysis, period extraction,
-    and optimized storage. If a specific format string is provided, conversion
-    is significantly faster and more reliable.
+    and optimized storage. If a specific format string is provided,
+    conversion is significantly faster and more reliable.
 
-    Attributes:
-        detected_format: The strptime format string (e.g., '%Y-%m-%d %H:%M:%S').
-            If None, the parser will attempt to infer the format for each row.
+    Parameters
+    ----------
+    detected_format : str, optional
+        The strptime format string (e.g., '%Y-%m-%d %H:%M:%S').
+        If None, the parser will attempt to infer the format for each row.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.DATETIME_CONVERSION.
+        """
         return RecommendationType.DATETIME_CONVERSION
 
     detected_format: str | None = None
@@ -1415,7 +2192,26 @@ class DatetimeConversionRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "DatetimeConversionRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        DatetimeConversionRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a DatetimeConversionRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1434,18 +2230,27 @@ class DatetimeConversionRecommendation(Recommendation):
         """
         Converts the target column to datetime64[ns] dtype.
 
-        Uses the pre-detected format if available for maximum speed.
-        Falls back to 'mixed' parsing if the format is unknown.
-        Uses format="mixed" for flexible inference when no explicit format is detected,
-        ensuring compatibility with varied string representations in the same column.
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the column to be converted.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the target column converted to datetime objects.
+
+        Notes
+        -----
+        Uses high-performance parsing if `detected_format` is available.
+        Falls back to 'mixed' parsing for flexible inference when the format is unknown,
+        ensuring compatibility with varied string representations.
         """
         if self.detected_format:
-            # High performance: we know exactly what we are looking for
             df[self.column_name] = pd.to_datetime(
                 df[self.column_name], format=self.detected_format, errors="coerce"
             )
         else:
-            # Flexible: handles multiple formats within the same column
             df[self.column_name] = pd.to_datetime(
                 df[self.column_name], format="mixed", errors="coerce"
             )
@@ -1476,16 +2281,31 @@ class FeatureExtractionRecommendation(Recommendation):
     essential for models to understand that time is periodic (e.g., December and
     January are 'close').
 
-    Attributes:
-        properties: A bitmask (DatetimeProperty) defining which features to extract.
-        output_prefix: A string prepended to auto-generated column names.
-        output_columns: A dictionary for manual column renaming. If a 'sin'
-            column is renamed, the 'cos' counterpart is automatically renamed
-            to match if not explicitly provided.
+    Parameters
+    ----------
+    properties : DatetimeProperty, default DatetimeProperty(0)
+        A bitmask defining which specific features to extract from the datetime
+        column.
+    output_prefix : str, default ""
+        A string prepended to auto-generated column names. If empty, the
+        `column_name` followed by an underscore is used.
+    output_columns : dict of str to str, optional
+        A dictionary for manual column renaming. If a 'sin' column is renamed,
+        the 'cos' counterpart is automatically renamed to match.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.FEATURE_EXTRACTION.
+        """
         return RecommendationType.FEATURE_EXTRACTION
 
     properties: DatetimeProperty = DatetimeProperty(0)
@@ -1496,7 +2316,26 @@ class FeatureExtractionRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "FeatureExtractionRecommendation | None":
-        """Get a recommendation by ID from the manager, ensuring it's of this type."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        FeatureExtractionRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a FeatureExtractionRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1507,6 +2346,7 @@ class FeatureExtractionRecommendation(Recommendation):
         return rec
 
     def __post_init__(self):
+        """Initializes identifiers and handles default naming logic."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -1514,8 +2354,21 @@ class FeatureExtractionRecommendation(Recommendation):
         """
         Extracts selected properties and appends them as new columns to the DataFrame.
 
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the column to be decomposed.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with extracted features appended as new columns.
+
+        Notes
+        -----
         Attempts a 'mixed' datetime conversion if the target column is not already
-        a datetime type. Returns the original DataFrame if conversion fails.
+        a datetime type. If the conversion fails, the original DataFrame is
+        returned.
         """
         # Ensure we are working with datetimes
         if not pd.api.types.is_datetime64_any_dtype(df[self.column_name]):
@@ -1603,7 +2456,6 @@ class FeatureExtractionRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays a summary of which features will be extracted and their naming scheme."""
-        # Narrow the type to list[str] by checking for existence of .name
         active_props: list[str] = [
             p.name
             for p in DatetimeProperty
@@ -1632,17 +2484,32 @@ class DatetimeDurationRecommendation(Recommendation):
 
     This creates a numeric feature representing the duration (delta) between
     a start and end point. This is useful for calculating "Time to Resolution,"
-    "Shipping Duration," or "Age."
+    "Shipping Duration," or "Age".
 
-    Attributes:
-        start_column: The 'from' datetime column.
-        end_column: The 'to' datetime column.
-        unit: The scale of the resulting number ('seconds', 'minutes', 'hours', 'days').
-        output_column: The name of the new feature. Auto-generated if not provided.
+    Parameters
+    ----------
+    start_column : str, default ""
+        The 'from' datetime column.
+    end_column : str, default ""
+        The 'to' datetime column.
+    unit : str, default "minutes"
+        The scale of the resulting number ('seconds', 'minutes', 'hours', 'days').
+    output_column : str, optional
+        The name of the new feature. Auto-generated if not provided.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.FEATURE_EXTRACTION.
+        """
         return RecommendationType.FEATURE_EXTRACTION
 
     start_column: str = ""
@@ -1654,7 +2521,26 @@ class DatetimeDurationRecommendation(Recommendation):
     def get_by_id(
         cls, manager: "RecommendationManager", rec_id: str
     ) -> "DatetimeDurationRecommendation | None":
-        """Retrieve and validate a recommendation of this type from the manager."""
+        """
+        Retrieve and validate a recommendation of this type from the manager.
+
+        Parameters
+        ----------
+        manager : RecommendationManager
+            The manager instance containing the pipeline.
+        rec_id : str
+            The unique identifier for the recommendation.
+
+        Returns
+        -------
+        DatetimeDurationRecommendation or None
+            The matched recommendation instance if found and of the correct type.
+
+        Raises
+        ------
+        TypeError
+            If the recommendation exists but is not a DatetimeDurationRecommendation.
+        """
         rec = manager.get_by_id(rec_id)
         if rec is None:
             return None
@@ -1675,18 +2561,26 @@ class DatetimeDurationRecommendation(Recommendation):
         """
         Subtracts the start column from the end column and converts to the target unit.
 
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the datetime columns for calculation.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the newly calculated duration feature column.
+
+        Notes
+        -----
         Missing values in either source column will result in NaN in the output.
+        Uses the pandas `.dt` accessor for vectorized `total_seconds` calculation.
         """
         if self.start_column not in df.columns or self.end_column not in df.columns:
-            # We return the original df or could raise an error depending on
-            # your pipeline's error-handling philosophy.
             return df
 
         # Calculate the raw timedelta
         delta = df[self.end_column] - df[self.start_column]
-
-        # Use the pandas .dt accessor for clean, vectorized total seconds
-        # This avoids manual numpy casting and is very readable.
         total_sec = delta.dt.total_seconds()
 
         # Scale based on unit
@@ -1722,9 +2616,47 @@ class ColumnHint:
     to specify the 'logical type' of a column and set constraints like rounding,
     bounds, or specific feature extraction needs.
 
-    Note:
-        It is highly recommended to use the provided factory methods (e.g., `.financial()`,
-        `.datetime()`) rather than instantiating this class directly.
+    Parameters
+    ----------
+    logical_type : ColumnHintType, optional
+        The inferred or user-specified type of the column.
+    floor : float, optional
+        The minimum valid value for numeric data.
+    ceiling : float, optional
+        The maximum valid value for numeric data.
+    datetime_format : str, optional
+        The strptime format string for datetime parsing.
+    datetime_features : list of DatetimeProperty, optional
+        Specific properties to extract from a datetime column.
+    output_names : dict of str to str, optional
+        Mapping for custom column naming in transformations.
+    agg_columns : list of str, optional
+        Source columns for aggregate feature engineering.
+    agg_op : str, optional
+        The mathematical operator for aggregation (e.g., 'sum', 'mean').
+    convert_to_int : bool, optional
+        If True, forces conversion to an integer type.
+    decimal_places : int, optional
+        Number of decimal digits to retain during rounding.
+    rounding_mode : RoundingMode, optional
+        The algorithm used for rounding operations.
+    scale_factor : float, optional
+        Multiplier applied to the data before processing.
+    lat_bounds : tuple of (float, float), optional
+        Valid latitude range for geospatial data.
+    lon_bounds : tuple of (float, float), optional
+        Valid longitude range for geospatial data.
+    unit : str, optional
+        Measurement unit for distance-based data.
+    is_ignored : bool, default False
+        If True, the column is completely bypassed by the engine.
+    should_drop : bool, default False
+        If True, forces a recommendation to drop the column.
+
+    Notes
+    -----
+    It is highly recommended to use the provided factory methods (e.g., `.financial()`,
+    `.datetime()`) rather than instantiating this class directly.
     """
 
     logical_type: ColumnHintType | None = None
@@ -1752,7 +2684,23 @@ class ColumnHint:
         datetime_features: list[DatetimeProperty] | None = None,
         output_names: dict[str, str] | None = None,
     ) -> "ColumnHint":
-        """Hint that a column should be treated as a Datetime."""
+        """
+        Hint that a column should be treated as a Datetime.
+
+        Parameters
+        ----------
+        datetime_format : str, optional
+            Explicit format string for parsing.
+        datetime_features : list of DatetimeProperty, optional
+            Features to extract (e.g., Year, Month).
+        output_names : dict of str to str, optional
+            Renaming mapping for extracted features.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for datetime processing.
+        """
         return cls(
             logical_type=ColumnHintType.DATETIME,
             datetime_format=datetime_format,
@@ -1769,7 +2717,27 @@ class ColumnHint:
         rounding_mode: RoundingMode = RoundingMode.NEAREST,
         scale_factor: float | None = None,
     ) -> "ColumnHint":
-        """Hint for currency or financial data, defaulting to 2 decimal places."""
+        """
+        Hint for currency or financial data, defaulting to 2 decimal places.
+
+        Parameters
+        ----------
+        floor : float, optional
+            Minimum expected value.
+        ceiling : float, optional
+            Maximum expected value.
+        decimal_places : int, default 2
+            Rounding precision.
+        rounding_mode : RoundingMode, default RoundingMode.NEAREST
+            Algorithm for rounding.
+        scale_factor : float, optional
+            Pre-processing multiplier.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for financial numeric data.
+        """
         return cls(
             logical_type=ColumnHintType.FINANCIAL,
             floor=floor,
@@ -1781,7 +2749,19 @@ class ColumnHint:
 
     @classmethod
     def categorical(cls, output_names: dict[str, str] | None = None) -> "ColumnHint":
-        """Hint that a column is categorical (e.g., for encoding purposes)."""
+        """
+        Hint that a column is categorical (e.g., for encoding purposes).
+
+        Parameters
+        ----------
+        output_names : dict of str to str, optional
+            A mapping for custom column naming during encoding.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for categorical processing.
+        """
         return cls(logical_type=ColumnHintType.CATEGORICAL, output_names=output_names)
 
     @classmethod
@@ -1795,7 +2775,29 @@ class ColumnHint:
         rounding_mode: RoundingMode = RoundingMode.NEAREST,
         scale_factor: float | None = None,
     ) -> "ColumnHint":
-        """Hint for general numeric data with optional bounds and precision controls."""
+        """
+        Hint for general numeric data with optional bounds and precision controls.
+
+        Parameters
+        ----------
+        floor : float, optional
+            The minimum valid value for the numeric data.
+        ceiling : float, optional
+            The maximum valid value for the numeric data.
+        convert_to_int : bool, optional
+            If True, forces conversion to an integer type.
+        decimal_places : int, optional
+            Number of decimal digits to retain during rounding.
+        rounding_mode : RoundingMode, default RoundingMode.NEAREST
+            The algorithm used for rounding operations.
+        scale_factor : float, optional
+            Multiplier applied to the data before processing.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for numeric data processing.
+        """
         return cls(
             logical_type=ColumnHintType.NUMERIC,
             floor=floor,
@@ -1819,6 +2821,28 @@ class ColumnHint:
         """
         Hint to generate an aggregate feature (e.g., sum of multiple columns).
 
+        Parameters
+        ----------
+        agg_columns : list of str
+            The source columns for the operation.
+        agg_op : str
+            The operation to perform ('sum', 'mean', etc.).
+        output_names : dict, optional
+            Target name for the new feature.
+        decimal_places : int, optional
+            Rounding precision for the result.
+        rounding_mode : RoundingMode, default RoundingMode.NEAREST
+            Algorithm for rounding.
+        scale_factor : float, optional
+            Pre-processing multiplier.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for feature aggregation.
+
+        Notes
+        -----
         Automatically removes duplicate source columns while preserving order.
         """
         seen = set()
@@ -1847,12 +2871,26 @@ class ColumnHint:
 
     @classmethod
     def ignore(cls) -> "ColumnHint":
-        """Marks a column to be completely bypassed by the recommendation engine."""
+        """
+        Marks a column to be completely bypassed by the recommendation engine.
+
+        Returns
+        -------
+        ColumnHint
+            A hint that prevents any recommendations for the column.
+        """
         return cls(is_ignored=True)
 
     @classmethod
     def drop(cls) -> "ColumnHint":
-        """Forces the generation of a 'DropColumn' recommendation."""
+        """
+        Forces the generation of a 'DropColumn' recommendation.
+
+        Returns
+        -------
+        ColumnHint
+            A hint that results in a recommendation to remove the column.
+        """
         return cls(should_drop=True)
 
     @classmethod
@@ -1861,7 +2899,21 @@ class ColumnHint:
         latitude_bounds: tuple[float, float] | None = None,
         longitude_bounds: tuple[float, float] | None = None,
     ) -> "ColumnHint":
-        """Hint for GPS/Geospatial coordinates."""
+        """
+        Hint for GPS/Geospatial coordinates.
+
+        Parameters
+        ----------
+        latitude_bounds : tuple of (float, float), optional
+            Valid latitude range (e.g., (-90, 90)).
+        longitude_bounds : tuple of (float, float), optional
+            Valid longitude range (e.g., (-180, 180)).
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for geospatial validation.
+        """
         return cls(
             logical_type=ColumnHintType.GEOSPATIAL,
             lat_bounds=latitude_bounds,
@@ -1875,7 +2927,23 @@ class ColumnHint:
         floor: float | None = None,
         ceiling: float | None = None,
     ) -> "ColumnHint":
-        """Hint for distance measurements (e.g., 'radius' or 'length')."""
+        """
+        Hint for distance measurements (e.g., 'radius' or 'length').
+
+        Parameters
+        ----------
+        unit : str, default "miles"
+            The unit of measurement for the distance.
+        floor : float, optional
+            The minimum valid distance value.
+        ceiling : float, optional
+            The maximum valid distance value.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for distance-based data.
+        """
         return cls(
             logical_type=ColumnHintType.DISTANCE,
             unit=unit,
@@ -1894,18 +2962,36 @@ class AggregationRecommendation(Recommendation):
     acts as a validator, identifying rows where the stored total doesn't match
     the computed total.
 
-    Attributes:
-        agg_columns: The list of columns to aggregate.
-        agg_op: The operation ('sum', 'mean', 'min', 'max').
-        output_column: The target column name for the result or validation check.
-        validation_mismatch_count: Count of rows where computed != existing values.
-        decimal_places: Precision for rounding (supports negative for rounding to tens/hundreds).
-        rounding_mode: The strategy used for decimals (e.g., BANKERS, UP, DOWN).
-        scale_factor: A multiplier applied post-aggregation but pre-rounding.
+    Parameters
+    ----------
+    agg_columns : list of str, optional
+        The list of columns to aggregate.
+    agg_op : str, default "sum"
+        The operation to perform ('sum', 'mean', 'min', 'max').
+    output_column : str, default ""
+        The target column name for the result or validation check.
+    validation_mismatch_count : int, default 0
+        Count of rows where computed values do not match existing values.
+    decimal_places : int, optional
+        Precision for rounding (supports negative for rounding to tens/hundreds).
+    rounding_mode : RoundingMode, default RoundingMode.NEAREST
+        The strategy used for decimals (e.g., BANKERS, UP, DOWN).
+    scale_factor : float, optional
+        A multiplier applied post-aggregation but pre-rounding.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
     """
 
     @property
     def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.FEATURE_AGGREGATION.
+        """
         return RecommendationType.FEATURE_AGGREGATION
 
     agg_columns: list[str] = field(default_factory=list)
@@ -1917,12 +3003,29 @@ class AggregationRecommendation(Recommendation):
     scale_factor: float | None = None
 
     def __post_init__(self):
+        """Initializes identifiers and locks the recommendation state."""
         self.id = self.compute_stable_id()
         self._lock_fields()
 
     def _aggregate(self, df: pd.DataFrame) -> pd.Series:
-        """Performs the row-wise math operation across the specified columns."""
-        # Using the mapping approach is cleaner than an if/else chain
+        """
+        Performs the row-wise math operation across the specified columns.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the source columns.
+
+        Returns
+        -------
+        pd.Series
+            A series containing the results of the row-wise operation.
+
+        Raises
+        ------
+        ValueError
+            If an unsupported aggregation operation is specified.
+        """
         op_map = {
             "sum": df[self.agg_columns].sum,
             "mean": df[self.agg_columns].mean,
@@ -1941,6 +3044,16 @@ class AggregationRecommendation(Recommendation):
 
         Updates the mismatch count if the output column already exists;
         otherwise, creates the new column.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to be transformed or validated.
+
+        Returns
+        -------
+        pd.DataFrame
+            The transformed DataFrame with updated features or validation counts.
         """
         computed = self._aggregate(df)
 
@@ -1959,12 +3072,9 @@ class AggregationRecommendation(Recommendation):
                 computed = np.floor(computed * factor + 0.5) / factor
 
         if self.output_column in df.columns:
-            # Data Validation Mode
-            # Fillna(0) ensures we don't count aligned NaNs as mismatches
             diff = df[self.output_column] - computed
             self.validation_mismatch_count = int(diff.fillna(0).ne(0).sum())
         else:
-            # Feature Creation Mode
             df[self.output_column] = computed
 
         return df
@@ -2001,13 +3111,18 @@ class RecommendationManager:
     imputing missing values before performing feature interaction) and
     provides global configuration for automated detection heuristics.
 
-    Attributes:
-        EXECUTION_PRIORITY (dict): A mapping of RecommendationTypes to their
-            relative execution order. Lower values indicate earlier execution.
-        DEFAULT_CONFIG (dict): Baseline thresholds for automated heuristics,
-            including categorical cardinality and null-drop limits.
-        default_date_format (str): The preferred format used for datetime
-            inference and conversion (defaults to 'ISO8601').
+    Attributes
+    ----------
+    EXECUTION_PRIORITY : dict[RecommendationType, int]
+        A mapping of RecommendationTypes to their relative execution order.
+        Lower values indicate earlier execution (e.g., structural cleanup
+        occurs before encoding).
+    DEFAULT_CONFIG : dict[str, Any]
+        Baseline thresholds for automated heuristics, including categorical
+        cardinality and null-ratio limits for column drops.
+    default_date_format : str
+        The preferred format string used for datetime inference and
+        conversion (defaults to 'ISO8601').
     """
 
     # Execution priority map: Defines the "Gravity" of the pipeline
@@ -2065,7 +3180,6 @@ class RecommendationManager:
         """
         self._pipeline: list[Recommendation] = recommendations or []
         self._summary_warnings: list[str] = []
-        # Store user-provided hints indexed by column name
         self._column_hints: dict[str, ColumnHint] = {}
         self.default_date_format = default_date_format
 
@@ -3082,6 +4196,29 @@ class RecommendationManager:
     ) -> None:
         """
         Heuristic brain for object/string columns to find dates or categories.
+
+        Analyzes string-based columns to determine if they represent temporal data
+        or high-redundancy categories. If a date pattern is detected, it suggests
+        both a conversion and a standard feature extraction. Otherwise, it
+        evaluates the cardinality ratio to suggest categorical conversion.
+
+        Parameters
+        ----------
+        col_name : str
+            The name of the column currently being analyzed.
+        series : pd.Series
+            The actual data values used for pattern sampling and inference.
+        unique_count : int
+            The number of distinct non-null values in the column.
+        total_rows : int
+            The total number of rows in the dataset, used for cardinality ratios.
+        config : dict
+            Configuration thresholds, specifically 'categorical_threshold'.
+
+        Returns
+        -------
+        None
+            Appends identified recommendations directly to the internal pipeline.
         """
         # A. Automated Datetime Inference
         # Sample the column to check for date patterns
@@ -3183,6 +4320,29 @@ class RecommendationManager:
     ) -> None:
         """
         Automated discovery of boolean flags and integer bit-depth optimizations.
+
+        Evaluates numeric columns to identify binary states that should be
+        represented as booleans. Additionally, it checks if floating-point columns
+        consist entirely of whole numbers and suggests the most efficient integer
+        bit-depth for conversion.
+
+        Parameters
+        ----------
+        col_name : str
+            The name of the column currently being analyzed.
+        series : pd.Series
+            The numeric data series used for distribution and type analysis.
+        unique_count : int
+            The number of distinct non-null values in the column.
+        total_rows : int
+            The total number of rows in the dataset.
+        config : dict
+            Configuration thresholds for automated detection.
+
+        Returns
+        -------
+        None
+            Appends identified recommendations directly to the internal pipeline.
         """
         non_null = series.dropna()
         if non_null.empty:
@@ -3193,14 +4353,13 @@ class RecommendationManager:
         if unique_count == 2:
             unique_vals = list(non_null.unique())
 
-            # Numeric-specific logic for 0/1, but this could be expanded
-            # for strings like Y/N in string_heuristics later.
+            # Numeric-specific logic for 0/1
             if pd.api.types.is_numeric_dtype(series):
                 if set(unique_vals) == {0, 1}:
                     rec_bool = BooleanClassificationRecommendation(
                         column_name=col_name,
                         description=f"Convert binary column '{col_name}' (0, 1) to boolean.",
-                        values=unique_vals,  # Pass the list as expected by the dataclass
+                        values=unique_vals,
                     )
                     self._pipeline.append(rec_bool)
                     return
@@ -3224,6 +4383,32 @@ class RecommendationManager:
     ) -> None:
         """
         Detects statistical outliers using the Interquartile Range (IQR) method.
+
+        Analyzes numeric columns for extreme values that fall outside the standard
+        1.5x IQR bounds. If outliers are detected within a manageable range
+        (between 0% and the configured threshold), it suggests a clipping strategy
+        to mitigate their impact on statistical models.
+
+        Parameters
+        ----------
+        col_name : str
+            The name of the column currently being analyzed.
+        series : pd.Series
+            The numeric data series to check for statistical anomalies.
+        config : dict
+            Configuration settings, specifically 'outlier_threshold' to control
+            when an automated recommendation is generated.
+
+        Returns
+        -------
+        None
+            Appends an OutlierHandlingRecommendation to the pipeline if detection
+            criteria are met.
+
+        Notes
+        -----
+        This method includes a significance guard that skips analysis if the
+        number of non-null values is less than 20.
         """
         non_null = series.dropna()
         if len(non_null) < 20:  # Statistical significance guard
@@ -3476,6 +4661,46 @@ class RecommendationManager:
     ) -> None:
         """
         Orchestrates the analysis pipeline to generate data improvement suggestions.
+
+        This method executes a three-stage process: individual column heuristics
+        (or hint applications), cross-column relationship discovery (e.g., date
+        durations), and pipeline refinement to ensure logical consistency.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The input dataset to analyze.
+        target_column : str, optional
+            The name of the label or target variable to protect from certain
+            transformations.
+        hints : dict of str to ColumnHint, optional
+            User-provided metadata to override automated inference for specific
+            columns.
+        max_decimal_places : int or dict of str to int, optional
+            Constraint on floating-point precision, globally or per column.
+        default_max_decimal_places : int, optional
+            The fallback rounding precision if not specified elsewhere.
+        min_binning_unique_values : int or dict of str to int, optional
+            Lower threshold of cardinality required to trigger binning.
+        default_min_binning_unique_values : int, default 10
+            The default minimum cardinality for binning.
+        max_binning_unique_values : int or dict of str to int, optional
+            Upper threshold of cardinality to prevent excessive feature expansion.
+        default_max_binning_unique_values : int, default 1000
+            The default maximum cardinality for binning.
+        allow_categorical_encoding : bool, default True
+            Whether to suggest One-Hot or Label encoding for categories.
+        hints_only : bool, default False
+            If True, skips all automated heuristics and only processes provided hints.
+        overwrite : bool, default True
+            If True, clears the existing pipeline before starting the analysis.
+        **kwargs : Any
+            Additional parameters passed to heuristic workers (e.g., custom thresholds).
+
+        Returns
+        -------
+        None
+            Populates the internal `_pipeline` attribute with Recommendation objects.
         """
         # 1. Initialize/Reset State
         if overwrite:
@@ -3723,3 +4948,22 @@ class RecommendationManager:
             rec.enabled = not rec.enabled
         elif not ok_if_none:
             raise ValueError(f"Toggle failed: Recommendation ID '{rec_id}' not found.")
+
+    def save_to_yaml(self, filepath: Path) -> None:
+        """
+        Serializes the internal pipeline to a YAML file for manual review or persistence.
+
+        Parameters
+        ----------
+        filepath : Path
+            The destination path for the YAML recommendation file.
+
+        Notes
+        -----
+        This method utilizes the `to_dict` method of each recommendation to ensure
+        all internal state and Enum members are correctly converted to serializable
+        formats before being saved by `dsr_files.yaml_handler`.
+        """
+        # Convert recommendations to a list of dicts for YAML serialization
+        data = [rec.to_dict() for rec in self._pipeline]
+        save_yaml(data, filepath)

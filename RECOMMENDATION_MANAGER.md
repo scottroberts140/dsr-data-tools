@@ -7,11 +7,13 @@ The `RecommendationManager` class provides a sophisticated pipeline management s
 ## Key Features
 
 ### 1. **Unique Identification**
+
 - Each recommendation receives an auto-generated unique ID (e.g., `rec_8aa52948`)
 - IDs enable logical insertion without index knowledge
 - IDs persist across pipeline operations
 
 ### 2. **Logical Insertion (`add_after`)**
+
 - Insert recommendations after a target by ID rather than by index
 - Eliminates index management burden
 - Raises `ValueError` if target ID not found
@@ -21,11 +23,13 @@ manager.add_after(target_id='rec_8aa52948', new_rec=my_recommendation)
 ```
 
 ### 3. **Validation (`_validate_pipeline`)**
+
 - Checks that no column is dropped before being used by later recommendations
 - Prevents invalid pipelines before execution
 - Provides clear error messages about conflicts
 
 ### 4. **Coordinated Application (`apply`)**
+
 The `apply()` method executes recommendations in three phases:
 
 1. **Validation**: Ensures pipeline integrity
@@ -37,6 +41,7 @@ result = manager.apply(df)
 ```
 
 ### 5. **Query Operations**
+
 - `len(manager)`: Get pipeline length
 - `manager[i]`: Access by index
 - `manager.get_by_id(rec_id)`: Retrieve by ID
