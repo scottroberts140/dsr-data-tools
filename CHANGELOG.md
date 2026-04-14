@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-14
+
+### Added
+
+* **Metadata-Driven Field Discovery**: Implemented dataclasses.field metadata to explicitly whitelist "editable" attributes within Recommendation subclasses.
+
+* **Deterministic Object Hashing**: Integrated joblib.hash logic into the new hashing.py module to generate unique fingerprints for complex Python objects like pandas DataFrames and NumPy arrays.
+
+* **Audit-Safe File Hashing**: Added chunked SHA-256 hashing for raw data files to verify integrity before memory ingestion, optimized for memory-constrained environments.
+
+* **NumPy-Style Documentation**: Fully updated all core class and method docstrings—including Recommendation and hashing utilities—to the NumPy standard for professional MLE clarity.
+
+### Changed
+
+* **Recommendation Base Class**: Refactored the Recommendation class to include system-managed id generation and _locked state flags to preserve audit history.
+
+* **Expanded Attribute Suite**: Added notes, alias, and enabled fields to the base class, tagged specifically for manual user justification and persistence.
+
+* **Refactored Identification**: Modified internal ID generation to ensure Recommendation objects remain deterministic across multiple analysis sessions.
+
+### Fixed
+
+* **Type Hinting Strictness**: Resolved Pylance type-checking issues by implementing explicit None checks in hashing and serialization routines.
+
+* **Output Visibility**: Transitioned internal status reporting from side-effect print() statements to functional list returns, supporting "Quiet Mode" CLI execution.
+
 ## [1.3.0] - 2026-04-13
 
 ### Added

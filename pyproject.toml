@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dsr-data-tools"
-version = "1.3.0"
+version = "1.4.0"
 description = "Generic data handling utilities including data splitting and analysis."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +23,8 @@ classifiers = [
 ]
 dependencies = [
     "dsr-files>=2.1.0",
-    "dsr-utils>=1.3.0",
+    "dsr-utils>=1.4.0",
+    "joblib>=1.4.0",
     "numpy>=2.4.4",
     "pandas>=3.0.2",
     "scikit-learn>=1.8.0",

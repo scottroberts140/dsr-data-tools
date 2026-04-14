@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 1.3.0**: This release introduces a more robust Recommendation Engine, featuring a **Human-in-the-Loop** workflow where users can refine auto-detected strategies for missing values, outliers, and numerical precision.
+**Version 1.4.0**: This release matures the Recommendation Engine into an **Audit-Aware Framework**. It introduces deterministic object hashing for data lineage and a metadata-driven discovery system for "Human-in-the-Loop" configuration.
 
 ## Features
 
@@ -20,6 +20,9 @@ Data analysis and exploration tools for exploratory data analysis (EDA).
 - **Intelligent Boolean Mapping**: Detects and standardizes diverse truthiness indicators (e.g., "Y/N", "Active/Inactive", "1/0") into proper boolean types.
 - **Cyclic Feature Extraction**: Decomposes datetimes into periodic Sine/Cosine features to preserve temporal relationships for machine learning.
 - **Numerical Precision Optimization**: Standardize decimal depth using configurable rounding modes (Nearest, Bankers, Up, Down).
+- **Audit Lineage & Integrity**: Generate deterministic fingerprints for DataFrames and Python objects using joblib-based memory buffer inspection.
+- **Metadata-Driven Customization**: Use class-level metadata to define "editable" fields, enabling seamless integration with YAML-based orchestration.
+- **Memory-Efficient File Hashing**: Chunked SHA-256 validation for raw data files, ensuring integrity on memory-constrained systems.
 
 ## Installation
 
@@ -109,12 +112,14 @@ df = rec.apply(df)
 The engine allows choosing between statistical imputation (mean/median/mode), constant filling, or row/column removal.
 
 ```python
-from dsr_data_tools.recommendations import MissingValuesRecommendation, MissingValueStrategy
+from dataclasses import fields
 
-# Example: Changing a pre-detected strategy from Mean to Median
-rec = manager.get_by_id("rec_id_for_column")
-if isinstance(rec, MissingValuesRecommendation):
-    rec.strategy = MissingValueStrategy.IMPUTE_MEDIAN
+# Discover which fields are whitelisted for user edits in your pipeline
+editable_fields = [
+    f.name for f in fields(rec) 
+    if f.metadata.get("editable", False)
+]
+# Returns: ['strategy', 'fill_value', 'notes', 'enabled', 'alias']
 ```
 
 ### Guided Recommendations with ColumnHints
@@ -142,6 +147,21 @@ manager.generate_recommendations(df, hints=hints)
 # Display the recommended pipeline
 for rec in manager._pipeline:
     rec.info()
+```
+
+### Data Integrity & Hashing
+
+```python
+from dsr_data_tools.hashing import calculate_object_hash, calculate_file_hash
+from pathlib import Path
+
+# Generate a deterministic fingerprint of a DataFrame for audit tracking
+df_hash = calculate_object_hash(df)
+print(f"DataFrame Signature: {df_hash}")
+
+# Verify raw data integrity before ingestion
+file_path = Path("data/raw/adult.csv")
+file_hash = calculate_file_hash(file_path)
 ```
 
 ## Performance
@@ -173,7 +193,8 @@ make benchmark N=5000000      # custom size
 ## Requirements
 
 - Python >= 3.10
-- dsr-utils >= 1.3.0
+- dsr-utils >= 1.4.0
+- joblib >= 1.4.0
 - numpy >= 2.4.4
 - pandas >= 3.0.2
 - scikit-learn >= 1.8.0

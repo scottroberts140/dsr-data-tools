@@ -4,7 +4,7 @@ import hashlib
 import json
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, cast
 
@@ -95,28 +95,36 @@ class Recommendation(ABC):
     Abstract base class for all dataset transformation suggestions.
 
     A Recommendation defines a specific operation to be performed on a DataFrame.
-    It supports deterministic ID generation, allowing recommendations to be
-    tracked and persisted across multiple analysis sessions.
+    It supports deterministic ID generation and provides a "Human-in-the-Loop"
+    interface for manual auditing and justification.
 
     Parameters
     ----------
     column_name : str
-        The target column for the transformation.
+        The target column for the transformation (Read-Only).
     description : str
-        A human-readable summary of what this change achieves.
+        A human-readable summary of the system-generated reasoning (Read-Only).
+    notes : str, default ""
+        User-provided commentary or justification for manual overrides.
+        Whitelisted for user edits in YAML persistence.
     enabled : bool, default True
-        If False, the RecommendationManager will skip this during `apply()`.
+        Controls if the RecommendationManager executes this during `apply()`.
+        Whitelisted for user edits in YAML persistence.
     alias : str, optional
         An optional user-defined label for display purposes.
+        Whitelisted for user edits in YAML persistence.
     is_locked : bool, default False
-        True if this was generated from a User Hint (protected from auto-deletion).
+        True if this was generated from a User Hint, protecting it from
+        automated deletion during re-analysis (Read-Only).
 
     Attributes
     ----------
     id : str
-        A deterministic 8-character hex ID (e.g., 'rec_a1b2c3d4').
+        A deterministic 8-character hex ID used to track and persist the
+        recommendation across audit sessions (System-Managed).
     _locked : bool
-        Internal flag indicating if identity-defining fields are read-only.
+        Internal flag indicating if identity-defining fields are read-only to
+        preserve audit integrity (System-Managed).
     """
 
     @property
@@ -134,11 +142,18 @@ class Recommendation(ABC):
 
     column_name: str
     description: str
-    id: str = field(default_factory=_generate_recommendation_id, init=False)
-    enabled: bool = True
-    alias: str | None = None
+    notes: str = field(default="", metadata={"editable": True})
+    id: str = field(
+        default_factory=_generate_recommendation_id,
+        init=False,
+        metadata={"editable": False},
+    )
+    enabled: bool = field(default=True, metadata={"editable": True})
+    alias: str | None = field(default=None, metadata={"editable": True})
     is_locked: bool = False
-    _locked: bool = field(default=False, init=False, repr=False)
+    _locked: bool = field(
+        default=False, init=False, repr=False, metadata={"editable": False}
+    )
 
     def __setattr__(self, name: str, value: Any) -> None:
         """
@@ -246,6 +261,12 @@ class Recommendation(ABC):
         data.pop("_locked", None)
         return data
 
+    def get_editable_attribute_names(self) -> list[str]:
+        """
+        Returns a list of attribute names tagged as editable in the metadata.
+        """
+        return [f.name for f in fields(self) if f.metadata.get("editable", False)]
+
 
 @dataclass
 class NonInformativeRecommendation(Recommendation):
@@ -276,7 +297,7 @@ class NonInformativeRecommendation(Recommendation):
         """
         return RecommendationType.NON_INFORMATIVE
 
-    reason: str = ""
+    reason: str = field(default="", metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -381,10 +402,14 @@ class MissingValuesRecommendation(Recommendation):
         """
         return RecommendationType.MISSING_VALUES
 
-    missing_count: int = 0
-    missing_percentage: float = 0.0
-    strategy: MissingValueStrategy = MissingValueStrategy.IMPUTE_MEAN
-    fill_value: str | int | float | None = None
+    missing_count: int = field(default=0, metadata={"editable": True})
+    missing_percentage: float = field(default=0.0, metadata={"editable": True})
+    strategy: MissingValueStrategy = field(
+        default=MissingValueStrategy.IMPUTE_MEAN, metadata={"editable": True}
+    )
+    fill_value: str | int | float | None = field(
+        default=None, metadata={"editable": True}
+    )
 
     @classmethod
     def get_by_id(
@@ -560,8 +585,10 @@ class EncodingRecommendation(Recommendation):
         """
         return RecommendationType.ENCODING
 
-    encoder_type: EncodingStrategy = EncodingStrategy.ONEHOT
-    unique_values: int = 0
+    encoder_type: EncodingStrategy = field(
+        default=EncodingStrategy.ONEHOT, metadata={"editable": True}
+    )
+    unique_values: int = field(default=0, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -719,8 +746,10 @@ class ClassImbalanceRecommendation(Recommendation):
         """
         return RecommendationType.CLASS_IMBALANCE
 
-    majority_percentage: float = 0.0
-    strategy: ImbalanceStrategy = ImbalanceStrategy.SMOTE
+    majority_percentage: float = field(default=0.0, metadata={"editable": True})
+    strategy: ImbalanceStrategy = field(
+        default=ImbalanceStrategy.SMOTE, metadata={"editable": True}
+    )
 
     @classmethod
     def get_by_id(
@@ -835,9 +864,11 @@ class OutlierDetectionRecommendation(Recommendation):
         """
         return RecommendationType.OUTLIER_DETECTION
 
-    strategy: OutlierStrategy = OutlierStrategy.SCALING
-    max_value: float = 0.0
-    mean_value: float = 0.0
+    strategy: OutlierStrategy = field(
+        default=OutlierStrategy.SCALING, metadata={"editable": True}
+    )
+    max_value: float = field(default=0.0, metadata={"editable": True})
+    mean_value: float = field(default=0.0, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -984,9 +1015,11 @@ class OutlierHandlingRecommendation(Recommendation):
         """
         return RecommendationType.OUTLIER_HANDLING
 
-    strategy: OutlierHandlingStrategy = OutlierHandlingStrategy.CLIP
-    lower_bound: float = 0.0
-    upper_bound: float = 0.0
+    strategy: OutlierHandlingStrategy = field(
+        default=OutlierHandlingStrategy.CLIP, metadata={"editable": True}
+    )
+    lower_bound: float = field(default=0.0, metadata={"editable": True})
+    upper_bound: float = field(default=0.0, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -1121,7 +1154,7 @@ class CategoricalConversionRecommendation(Recommendation):
         """
         return RecommendationType.CATEGORICAL_CONVERSION
 
-    unique_values: int = 0
+    unique_values: int = field(default=0, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -1226,7 +1259,7 @@ class BooleanClassificationRecommendation(Recommendation):
         """
         return RecommendationType.BOOLEAN_CLASSIFICATION
 
-    values: list[Any] = field(default_factory=list)
+    values: list[Any] = field(default_factory=list, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -1353,8 +1386,8 @@ class BinningRecommendation(Recommendation):
         """
         return RecommendationType.BINNING
 
-    bins: list[float] = field(default_factory=list)
-    labels: list[str] = field(default_factory=list)
+    bins: list[float] = field(default_factory=list, metadata={"editable": True})
+    labels: list[str] = field(default_factory=list, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -1495,8 +1528,8 @@ class IntegerConversionRecommendation(Recommendation):
         """
         return RecommendationType.INT_CONVERSION
 
-    target_depth: BitDepth = BitDepth.INT32
-    integer_count: int = 0
+    target_depth: BitDepth = field(default=BitDepth.INT32, metadata={"editable": True})
+    integer_count: int = field(default=0, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -1619,7 +1652,9 @@ class FloatConversionRecommendation(Recommendation):
         """
         return RecommendationType.FLOAT_CONVERSION
 
-    target_depth: BitDepth = BitDepth.FLOAT32
+    target_depth: BitDepth = field(
+        default=BitDepth.FLOAT32, metadata={"editable": True}
+    )
 
     @classmethod
     def get_by_id(
@@ -1742,12 +1777,14 @@ class DecimalPrecisionRecommendation(Recommendation):
         """
         return RecommendationType.DECIMAL_PRECISION_OPTIMIZATION
 
-    max_decimal_places: int = 0
-    min_value: float = 0.0
-    max_value: float = 0.0
-    convert_to_int: bool = False
-    rounding_mode: RoundingMode = RoundingMode.NEAREST
-    scale_factor: float | None = None
+    max_decimal_places: int = field(default=0, metadata={"editable": True})
+    min_value: float = field(default=0.0, metadata={"editable": True})
+    max_value: float = field(default=0.0, metadata={"editable": True})
+    convert_to_int: bool = field(default=False, metadata={"editable": True})
+    rounding_mode: RoundingMode = field(
+        default=RoundingMode.NEAREST, metadata={"editable": True}
+    )
+    scale_factor: float | None = field(default=None, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -1908,9 +1945,11 @@ class ValueReplacementRecommendation(Recommendation):
         """
         return RecommendationType.VALUE_REPLACEMENT
 
-    non_numeric_values: list[str] = field(default_factory=list)
-    non_numeric_count: int = 0
-    replacement_value: float | str = np.nan
+    non_numeric_values: list[str] = field(
+        default_factory=list, metadata={"editable": True}
+    )
+    non_numeric_count: int = field(default=0, metadata={"editable": True})
+    replacement_value: float | str = field(default=np.nan, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -2048,12 +2087,14 @@ class FeatureInteractionRecommendation(Recommendation):
         """
         return RecommendationType.FEATURE_INTERACTION
 
-    column_name_2: str = ""
-    interaction_type: InteractionType = InteractionType.STATUS_IMPACT
-    operation: str = "*"
-    rationale: str = ""
-    derived_name: str = ""
-    priority_score: float = 0.0
+    column_name_2: str = field(default="", metadata={"editable": True})
+    interaction_type: InteractionType = field(
+        default=InteractionType.STATUS_IMPACT, metadata={"editable": True}
+    )
+    operation: str = field(default="*", metadata={"editable": True})
+    rationale: str = field(default="", metadata={"editable": True})
+    derived_name: str = field(default="", metadata={"editable": True})
+    priority_score: float = field(default=0.0, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -2186,7 +2227,7 @@ class DatetimeConversionRecommendation(Recommendation):
         """
         return RecommendationType.DATETIME_CONVERSION
 
-    detected_format: str | None = None
+    detected_format: str | None = field(default=None, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -2308,9 +2349,13 @@ class FeatureExtractionRecommendation(Recommendation):
         """
         return RecommendationType.FEATURE_EXTRACTION
 
-    properties: DatetimeProperty = DatetimeProperty(0)
-    output_prefix: str = ""
-    output_columns: dict[str, str] | None = None
+    properties: DatetimeProperty = field(
+        default=DatetimeProperty(0), metadata={"editable": True}
+    )
+    output_prefix: str = field(default="", metadata={"editable": True})
+    output_columns: dict[str, str] | None = field(
+        default=None, metadata={"editable": True}
+    )
 
     @classmethod
     def get_by_id(
@@ -2512,10 +2557,10 @@ class DatetimeDurationRecommendation(Recommendation):
         """
         return RecommendationType.FEATURE_EXTRACTION
 
-    start_column: str = ""
-    end_column: str = ""
-    unit: str = "minutes"
-    output_column: str | None = None
+    start_column: str = field(default="", metadata={"editable": True})
+    end_column: str = field(default="", metadata={"editable": True})
+    unit: str = field(default="minutes", metadata={"editable": True})
+    output_column: str | None = field(default=None, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -2605,6 +2650,158 @@ class DatetimeDurationRecommendation(Recommendation):
         print(f"    Calculation: '{self.end_column}' - '{self.start_column}'")
         print(f"    Output Column: '{self.output_column}'")
         print(f"    Result Unit: {self.unit}")
+
+
+@dataclass
+class AggregationRecommendation(Recommendation):
+    """
+    Recommendation to aggregate multiple source columns or validate an existing total.
+
+    This class supports horizontal (row-wise) operations like sum, mean, min, and max.
+    If the `output_column` already exists in the DataFrame, this recommendation
+    acts as a validator, identifying rows where the stored total doesn't match
+    the computed total.
+
+    Parameters
+    ----------
+    agg_columns : list of str, optional
+        The list of columns to aggregate.
+    agg_op : str, default "sum"
+        The operation to perform ('sum', 'mean', 'min', 'max').
+    output_column : str, default ""
+        The target column name for the result or validation check.
+    validation_mismatch_count : int, default 0
+        Count of rows where computed values do not match existing values.
+    decimal_places : int, optional
+        Precision for rounding (supports negative for rounding to tens/hundreds).
+    rounding_mode : RoundingMode, default RoundingMode.NEAREST
+        The strategy used for decimals (e.g., BANKERS, UP, DOWN).
+    scale_factor : float, optional
+        A multiplier applied post-aggregation but pre-rounding.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
+    """
+
+    @property
+    def rec_type(self) -> RecommendationType:
+        """
+        The categorical type of the recommendation.
+
+        Returns
+        -------
+        RecommendationType
+            Always returns RecommendationType.FEATURE_AGGREGATION.
+        """
+        return RecommendationType.FEATURE_AGGREGATION
+
+    agg_columns: list[str] = field(default_factory=list, metadata={"editable": True})
+    agg_op: str = field(default="sum", metadata={"editable": True})
+    output_column: str = field(default="", metadata={"editable": True})
+    validation_mismatch_count: int = field(default=0, metadata={"editable": True})
+    decimal_places: int | None = field(default=None, metadata={"editable": True})
+    rounding_mode: RoundingMode = field(
+        default=RoundingMode.NEAREST, metadata={"editable": True}
+    )
+    scale_factor: float | None = field(default=None, metadata={"editable": True})
+
+    def __post_init__(self):
+        """Initializes identifiers and locks the recommendation state."""
+        self.id = self.compute_stable_id()
+        self._lock_fields()
+
+    def _aggregate(self, df: pd.DataFrame) -> pd.Series:
+        """
+        Performs the row-wise math operation across the specified columns.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame containing the source columns.
+
+        Returns
+        -------
+        pd.Series
+            A series containing the results of the row-wise operation.
+
+        Raises
+        ------
+        ValueError
+            If an unsupported aggregation operation is specified.
+        """
+        op_map = {
+            "sum": df[self.agg_columns].sum,
+            "mean": df[self.agg_columns].mean,
+            "min": df[self.agg_columns].min,
+            "max": df[self.agg_columns].max,
+        }
+
+        if self.agg_op not in op_map:
+            raise ValueError(f"Unsupported aggregation operation: {self.agg_op}")
+
+        return op_map[self.agg_op](axis=1)
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Executes aggregation, scaling, and rounding.
+
+        Updates the mismatch count if the output column already exists;
+        otherwise, creates the new column.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to be transformed or validated.
+
+        Returns
+        -------
+        pd.DataFrame
+            The transformed DataFrame with updated features or validation counts.
+        """
+        computed = self._aggregate(df)
+
+        if self.scale_factor is not None:
+            computed *= self.scale_factor
+
+        if self.decimal_places is not None:
+            factor = 10**self.decimal_places
+            if self.rounding_mode == RoundingMode.BANKERS:
+                computed = np.round(computed * factor) / factor
+            elif self.rounding_mode == RoundingMode.UP:
+                computed = np.ceil(computed * factor) / factor
+            elif self.rounding_mode == RoundingMode.DOWN:
+                computed = np.floor(computed * factor) / factor
+            else:  # NEAREST (Half-up)
+                computed = np.floor(computed * factor + 0.5) / factor
+
+        if self.output_column in df.columns:
+            diff = df[self.output_column] - computed
+            self.validation_mismatch_count = int(diff.fillna(0).ne(0).sum())
+        else:
+            df[self.output_column] = computed
+
+        return df
+
+    def info(self) -> None:
+        """Prints aggregation summary, including any validation discrepancies found."""
+        print(f"  Recommendation: FEATURE_AGGREGATION")
+        print(f"    ID: {self.id}")
+        print(f"    Enabled: {self.enabled}")
+        if self.is_locked:
+            print(f"    Source: User Hint")
+        print(
+            f"    Operation: {self.agg_op.upper()} of {len(self.agg_columns)} columns"
+        )
+        print(f"    Target Column: '{self.output_column}'")
+
+        if self.decimal_places is not None:
+            print(
+                f"    Rounding: {self.decimal_places} places ({self.rounding_mode.name})"
+            )
+
+        if self.validation_mismatch_count > 0:
+            print(
+                f"    [!] Validation Warning: {self.validation_mismatch_count} mismatches detected"
+            )
 
 
 @dataclass
@@ -2950,156 +3147,6 @@ class ColumnHint:
             floor=floor,
             ceiling=ceiling,
         )
-
-
-@dataclass
-class AggregationRecommendation(Recommendation):
-    """
-    Recommendation to aggregate multiple source columns or validate an existing total.
-
-    This class supports horizontal (row-wise) operations like sum, mean, min, and max.
-    If the `output_column` already exists in the DataFrame, this recommendation
-    acts as a validator, identifying rows where the stored total doesn't match
-    the computed total.
-
-    Parameters
-    ----------
-    agg_columns : list of str, optional
-        The list of columns to aggregate.
-    agg_op : str, default "sum"
-        The operation to perform ('sum', 'mean', 'min', 'max').
-    output_column : str, default ""
-        The target column name for the result or validation check.
-    validation_mismatch_count : int, default 0
-        Count of rows where computed values do not match existing values.
-    decimal_places : int, optional
-        Precision for rounding (supports negative for rounding to tens/hundreds).
-    rounding_mode : RoundingMode, default RoundingMode.NEAREST
-        The strategy used for decimals (e.g., BANKERS, UP, DOWN).
-    scale_factor : float, optional
-        A multiplier applied post-aggregation but pre-rounding.
-    **kwargs : dict
-        Additional keyword arguments passed to the Recommendation base class.
-    """
-
-    @property
-    def rec_type(self) -> RecommendationType:
-        """
-        The categorical type of the recommendation.
-
-        Returns
-        -------
-        RecommendationType
-            Always returns RecommendationType.FEATURE_AGGREGATION.
-        """
-        return RecommendationType.FEATURE_AGGREGATION
-
-    agg_columns: list[str] = field(default_factory=list)
-    agg_op: str = "sum"
-    output_column: str = ""
-    validation_mismatch_count: int = 0
-    decimal_places: int | None = None
-    rounding_mode: RoundingMode = RoundingMode.NEAREST
-    scale_factor: float | None = None
-
-    def __post_init__(self):
-        """Initializes identifiers and locks the recommendation state."""
-        self.id = self.compute_stable_id()
-        self._lock_fields()
-
-    def _aggregate(self, df: pd.DataFrame) -> pd.Series:
-        """
-        Performs the row-wise math operation across the specified columns.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            The DataFrame containing the source columns.
-
-        Returns
-        -------
-        pd.Series
-            A series containing the results of the row-wise operation.
-
-        Raises
-        ------
-        ValueError
-            If an unsupported aggregation operation is specified.
-        """
-        op_map = {
-            "sum": df[self.agg_columns].sum,
-            "mean": df[self.agg_columns].mean,
-            "min": df[self.agg_columns].min,
-            "max": df[self.agg_columns].max,
-        }
-
-        if self.agg_op not in op_map:
-            raise ValueError(f"Unsupported aggregation operation: {self.agg_op}")
-
-        return op_map[self.agg_op](axis=1)
-
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Executes aggregation, scaling, and rounding.
-
-        Updates the mismatch count if the output column already exists;
-        otherwise, creates the new column.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            The DataFrame to be transformed or validated.
-
-        Returns
-        -------
-        pd.DataFrame
-            The transformed DataFrame with updated features or validation counts.
-        """
-        computed = self._aggregate(df)
-
-        if self.scale_factor is not None:
-            computed *= self.scale_factor
-
-        if self.decimal_places is not None:
-            factor = 10**self.decimal_places
-            if self.rounding_mode == RoundingMode.BANKERS:
-                computed = np.round(computed * factor) / factor
-            elif self.rounding_mode == RoundingMode.UP:
-                computed = np.ceil(computed * factor) / factor
-            elif self.rounding_mode == RoundingMode.DOWN:
-                computed = np.floor(computed * factor) / factor
-            else:  # NEAREST (Half-up)
-                computed = np.floor(computed * factor + 0.5) / factor
-
-        if self.output_column in df.columns:
-            diff = df[self.output_column] - computed
-            self.validation_mismatch_count = int(diff.fillna(0).ne(0).sum())
-        else:
-            df[self.output_column] = computed
-
-        return df
-
-    def info(self) -> None:
-        """Prints aggregation summary, including any validation discrepancies found."""
-        print(f"  Recommendation: FEATURE_AGGREGATION")
-        print(f"    ID: {self.id}")
-        print(f"    Enabled: {self.enabled}")
-        if self.is_locked:
-            print(f"    Source: User Hint")
-        print(
-            f"    Operation: {self.agg_op.upper()} of {len(self.agg_columns)} columns"
-        )
-        print(f"    Target Column: '{self.output_column}'")
-
-        if self.decimal_places is not None:
-            print(
-                f"    Rounding: {self.decimal_places} places ({self.rounding_mode.name})"
-            )
-
-        if self.validation_mismatch_count > 0:
-            print(
-                f"    [!] Validation Warning: {self.validation_mismatch_count} mismatches detected"
-            )
 
 
 class RecommendationManager:
@@ -4949,9 +4996,11 @@ class RecommendationManager:
         elif not ok_if_none:
             raise ValueError(f"Toggle failed: Recommendation ID '{rec_id}' not found.")
 
+    from dataclasses import fields
+
     def save_to_yaml(self, filepath: Path) -> None:
         """
-        Serializes the internal pipeline to a YAML file for manual review or persistence.
+        Serializes the internal pipeline to a YAML file as a dictionary keyed by ID.
 
         Parameters
         ----------
@@ -4960,10 +5009,36 @@ class RecommendationManager:
 
         Notes
         -----
-        This method utilizes the `to_dict` method of each recommendation to ensure
-        all internal state and Enum members are correctly converted to serializable
-        formats before being saved by `dsr_files.yaml_handler`.
+        Each recommendation is converted to a dictionary keyed by ID. Attributes
+        not whitelisted as 'editable' in the class metadata receive a [RO] suffix
+        to prevent accidental modification of the audit trail.
         """
-        # Convert recommendations to a list of dicts for YAML serialization
-        data = [rec.to_dict() for rec in self._pipeline]
-        save_yaml(data, filepath)
+        data = {}
+
+        for rec in self._pipeline:
+            # Get all fields for this specific recommendation instance
+            editable_fields = [
+                f.name for f in fields(rec) if f.metadata.get("editable", False)
+            ]
+
+            # Convert the recommendation to its dictionary representation
+            rec_dict = rec.to_dict()
+            rec_dict.pop("id", None)  # Remove redundant ID as it is the top-level key
+
+            # Apply [RO] indicators to non-editable keys
+            processed_rec = {}
+            for key, value in rec_dict.items():
+                if key in editable_fields:
+                    processed_rec[key] = value
+                else:
+                    processed_rec[f"{key} [RO]"] = value
+
+            data[rec.id] = processed_rec
+
+        header = (
+            "CAUTION: Do not modify the top-level keys (IDs) or keys marked [RO].\n"
+            "Only fields without [RO] (e.g., 'enabled', 'notes') are intended for manual edits.\n"
+            "Modifying [RO] fields will result in those changes being ignored during 'clean'."
+        )
+
+        save_yaml(data, filepath, header=header)
