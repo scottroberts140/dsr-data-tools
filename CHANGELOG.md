@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-04-14
+
+### Removed
+
+* **Hashing Documentation**: Removed references to "Deterministic Object Hashing" and "Audit-Safe File Hashing" as these responsibilities have been moved to the dsr-orchestrator level.
+
+* **Hashing Examples**: Deleted the "Data Integrity & Hashing" section from the README to reflect the library's focus on recommendation logic.
+
+### Fixed
+
+* **Feature Accuracy**: Corrected the feature list to ensure all listed capabilities are natively provided by dsr-data-tools.
+
 ## [1.4.0] - 2026-04-14
 
 ### Added
