@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 1.4.1**: This release matures the Recommendation Engine into an **Audit-Aware Framework**. It introduces deterministic object hashing for data lineage and a metadata-driven discovery system for "Human-in-the-Loop" configuration.
+**Version 1.4.2**: Tightened `RecommendationManager.save_to_yaml` compatibility with the latest `dsr-files` path typing so YAML persistence works cleanly with local paths, cloud paths, and static type checking.
 
 ## Features
 

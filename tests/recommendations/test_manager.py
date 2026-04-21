@@ -77,10 +77,12 @@ def test_manager_save_to_yaml(tmp_path):
     )
 
     manager = RecommendationManager(recommendations=[rec])
-    manager.save_to_yaml(filepath)
+    output_path, rejected = manager.save_to_yaml(tmp_path, "recommendations")
 
     # Check file exists and has content
     assert filepath.exists()
+    assert output_path == filepath
+    assert rejected == {}
     content = filepath.read_text()
     assert "age" in content
     assert "INT_CONVERSION" in content

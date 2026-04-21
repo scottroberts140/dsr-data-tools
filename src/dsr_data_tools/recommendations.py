@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, cast
 
+from cloudpathlib import CloudPath
+from dsr_files.utils import PathLike
 from dsr_files.yaml_handler import save_yaml
 
 if TYPE_CHECKING:
@@ -357,14 +359,14 @@ class NonInformativeRecommendation(Recommendation):
 
     def info(self) -> None:
         """Prints the rationale for removal and the target column name."""
-        print(f"  Recommendation: NON_INFORMATIVE")
+        print("  Recommendation: NON_INFORMATIVE")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(f"    Reason: {self.reason}")
-        print(f"    Action: Drop non-informative column")
+        print("    Action: Drop non-informative column")
 
 
 @dataclass
@@ -521,7 +523,7 @@ class MissingValuesRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays null statistics and the currently selected strategy."""
-        print(f"  Recommendation: MISSING_VALUES")
+        print("  Recommendation: MISSING_VALUES")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Column: '{self.column_name}'")
@@ -688,7 +690,7 @@ class EncodingRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays cardinality and the selected encoding strategy."""
-        print(f"  Recommendation: ENCODING")
+        print("  Recommendation: ENCODING")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Column: '{self.column_name}'")
@@ -706,7 +708,7 @@ class EncodingRecommendation(Recommendation):
             A descriptive string mapping the current strategy to a natural language action.
         """
         desc_map = {
-            EncodingStrategy.CATEGORICAL: f"Convert to Categorical dtype (reduces memory usage)",
+            EncodingStrategy.CATEGORICAL: "Convert to Categorical dtype (reduces memory usage)",
             EncodingStrategy.ONEHOT: f"Expand into {self.unique_values} binary features",
             EncodingStrategy.LABEL: "Map categories to unique integers (preserves nulls)",
             EncodingStrategy.ORDINAL: "Map categories to sequential integers (unknowns = -1)",
@@ -811,13 +813,13 @@ class ClassImbalanceRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays imbalance statistics and training-time instructions."""
-        print(f"  Recommendation: CLASS_IMBALANCE")
+        print("  Recommendation: CLASS_IMBALANCE")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Target Column: '{self.column_name}'")
         print(f"    Skew: {self.majority_percentage:.1f}% Majority Class")
         print(f"    Suggested Strategy: {self.strategy.name} (EDITABLE)")
-        print(f"    Note: This action is applied during training, not pre-processing.")
+        print("    Note: This action is applied during training, not pre-processing.")
 
     def _get_action_description(self) -> str:
         """
@@ -958,7 +960,7 @@ class OutlierDetectionRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays outlier statistics and the mitigation strategy."""
-        print(f"  Recommendation: OUTLIER_DETECTION")
+        print("  Recommendation: OUTLIER_DETECTION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Column: '{self.column_name}'")
@@ -1098,7 +1100,7 @@ class OutlierHandlingRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays bound thresholds and the chosen cleaning action."""
-        print(f"  Recommendation: OUTLIER_HANDLING")
+        print("  Recommendation: OUTLIER_HANDLING")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Column: '{self.column_name}'")
@@ -1217,16 +1219,16 @@ class CategoricalConversionRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays memory optimization benefits and the target column."""
-        print(f"  Recommendation: CATEGORICAL_CONVERSION")
+        print("  Recommendation: CATEGORICAL_CONVERSION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(f"    Cardinality: {self.unique_values} unique values")
         if self.alias:
             print(f"    Alias: {self.alias}")
-        print(f"    Action: Convert to categorical dtype for memory optimization")
+        print("    Action: Convert to categorical dtype for memory optimization")
 
 
 @dataclass
@@ -1324,7 +1326,7 @@ class BooleanClassificationRecommendation(Recommendation):
         TRUE_INDICATORS = {"Y", "YES", "1", "TRUE", "ON", "T", "ACTIVE"}
 
         val_a_str = str(self.values[0]).strip().upper()
-        val_b_str = str(self.values[1]).strip().upper()
+        _ = str(self.values[1]).strip().upper()
 
         # 2. Determine Mapping: If the first value is a 'True' indicator,
         # it gets True and the second gets False. Otherwise, reverse it.
@@ -1345,14 +1347,14 @@ class BooleanClassificationRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays the detected binary values and the conversion intent."""
-        print(f"  Recommendation: BOOLEAN_CLASSIFICATION")
+        print("  Recommendation: BOOLEAN_CLASSIFICATION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(f"    Detected Binary Values: {self.values}")
-        print(f"    Action: Map to True/False and convert to boolean dtype")
+        print("    Action: Map to True/False and convert to boolean dtype")
 
 
 @dataclass
@@ -1484,11 +1486,11 @@ class BinningRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays binning edges and resulting categorical labels."""
-        print(f"  Recommendation: BINNING")
+        print("  Recommendation: BINNING")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(f"    Range Edges: {self.bins}")
         print(f"    Category Labels: {self.labels}")
@@ -1610,11 +1612,11 @@ class IntegerConversionRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays target depth and the number of valid integers detected."""
-        print(f"  Recommendation: INT_CONVERSION")
+        print("  Recommendation: INT_CONVERSION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(f"    Found: {self.integer_count} whole numbers")
 
@@ -1728,11 +1730,11 @@ class FloatConversionRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays target precision and the target column."""
-        print(f"  Recommendation: FLOAT_CONVERSION")
+        print("  Recommendation: FLOAT_CONVERSION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(f"    Action: Convert to {self.target_depth.value}")
 
@@ -1895,11 +1897,11 @@ class DecimalPrecisionRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays rounding configuration and memory optimization status."""
-        print(f"  Recommendation: DECIMAL_PRECISION")
+        print("  Recommendation: DECIMAL_PRECISION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(f"    Data Range: [{self.min_value}, {self.max_value}]")
         print(
@@ -1907,9 +1909,9 @@ class DecimalPrecisionRecommendation(Recommendation):
         )
 
         if self.max_decimal_places == 0 and self.convert_to_int:
-            print(f"    Optimization: Will attempt conversion to Integer")
+            print("    Optimization: Will attempt conversion to Integer")
         elif self.max_decimal_places <= 6:
-            print(f"    Optimization: Will downcast to float32 (memory savings)")
+            print("    Optimization: Will downcast to float32 (memory savings)")
 
 
 @dataclass
@@ -2024,7 +2026,7 @@ class ValueReplacementRecommendation(Recommendation):
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Column: '{self.column_name}'")
         print(f"    Non-numeric values: {self.non_numeric_values}")
         print(f"    Count: {self.non_numeric_count}")
@@ -2299,17 +2301,17 @@ class DatetimeConversionRecommendation(Recommendation):
 
     def info(self) -> None:
         """Displays the conversion details and the format string being used."""
-        print(f"  Recommendation: DATETIME_CONVERSION")
+        print("  Recommendation: DATETIME_CONVERSION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Column: '{self.column_name}'")
 
         if self.detected_format:
             print(f"    Format Found: '{self.detected_format}'")
-            print(f"    Action: Convert to datetime using specified format.")
+            print("    Action: Convert to datetime using specified format.")
         else:
-            print(f"    Format Found: None (Auto-detect)")
-            print(f"    Action: Convert to datetime (invalid values coerced to NaT).")
+            print("    Format Found: None (Auto-detect)")
+            print("    Action: Convert to datetime (invalid values coerced to NaT).")
 
 
 @dataclass
@@ -2507,7 +2509,7 @@ class FeatureExtractionRecommendation(Recommendation):
             if p in self.properties and p.name is not None
         ]
 
-        print(f"  Recommendation: FEATURE_EXTRACTION")
+        print("  Recommendation: FEATURE_EXTRACTION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         print(f"    Column: '{self.column_name}'")
@@ -2642,11 +2644,11 @@ class DatetimeDurationRecommendation(Recommendation):
 
     def info(self) -> None:
         """Prints the duration calculation details."""
-        print(f"  Recommendation: DATETIME_DURATION")
+        print("  Recommendation: DATETIME_DURATION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(f"    Calculation: '{self.end_column}' - '{self.start_column}'")
         print(f"    Output Column: '{self.output_column}'")
         print(f"    Result Unit: {self.unit}")
@@ -2783,11 +2785,11 @@ class AggregationRecommendation(Recommendation):
 
     def info(self) -> None:
         """Prints aggregation summary, including any validation discrepancies found."""
-        print(f"  Recommendation: FEATURE_AGGREGATION")
+        print("  Recommendation: FEATURE_AGGREGATION")
         print(f"    ID: {self.id}")
         print(f"    Enabled: {self.enabled}")
         if self.is_locked:
-            print(f"    Source: User Hint")
+            print("    Source: User Hint")
         print(
             f"    Operation: {self.agg_op.upper()} of {len(self.agg_columns)} columns"
         )
@@ -3480,7 +3482,7 @@ class RecommendationManager:
 
         if cleanup_targets:
             print("\n" + "─" * 80)
-            print(f"RESOURCE MANAGEMENT: Redundant source columns to be purged:")
+            print("RESOURCE MANAGEMENT: Redundant source columns to be purged:")
             print(f"» {', '.join(sorted(cleanup_targets))}")
 
         # 5. Alerts & Warnings
@@ -4572,7 +4574,6 @@ class RecommendationManager:
 
         # Evaluate all unique pairs (A, B)
         for col_a, col_b in itertools.permutations(cols, 2):
-
             # 1. Linguistic Check: Do the names sound like a pair?
             # (e.g., 'start' vs 'end')
             sim_score = self._semantic_similarity(col_a, col_b)
@@ -4998,20 +4999,31 @@ class RecommendationManager:
 
     from dataclasses import fields
 
-    def save_to_yaml(self, filepath: Path) -> None:
+    def save_to_yaml(
+        self, output_dir: PathLike, filename: str
+    ) -> tuple[Path | CloudPath, dict[str, Any]]:
         """
         Serializes the internal pipeline to a YAML file as a dictionary keyed by ID.
 
         Parameters
         ----------
-        filepath : Path
-            The destination path for the YAML recommendation file.
+        output_dir : str | Path | CloudPath
+            The destination directory for the recommendation file. Supports
+            local filesystem paths and cloud URIs.
+        filename : str
+            The base name for the YAML recommendation file.
 
         Notes
         -----
         Each recommendation is converted to a dictionary keyed by ID. Attributes
         not whitelisted as 'editable' in the class metadata receive a [RO] suffix
         to prevent accidental modification of the audit trail.
+
+        Returns
+        -------
+        tuple[Path | CloudPath, dict[str, Any]]
+            The full output path and rejected keyword arguments returned by
+            `dsr_files.yaml_handler.save_yaml`.
         """
         data = {}
 
@@ -5041,4 +5053,4 @@ class RecommendationManager:
             "Modifying [RO] fields will result in those changes being ignored during 'clean'."
         )
 
-        save_yaml(data, filepath, header=header)
+        return save_yaml(data, output_dir, filename, header=header)

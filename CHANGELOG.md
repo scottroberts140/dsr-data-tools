@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-04-21
+
+### Fixed
+
+* **YAML Persistence Typing**: Updated `RecommendationManager.save_to_yaml` to use the shared path-compatible typing expected by `dsr-files`, avoiding `str(...)` workarounds while preserving local and cloud path support.
+
+* **Regression Coverage**: Added focused test coverage to verify `save_to_yaml` returns the concrete saved path and rejected-kwargs payload from the YAML handler.
+
+### Changed
+
+* **Dependency Floor**: Raised the minimum `dsr-files` requirement to `3.1.1` so installations receive the path typing and package version behavior that `save_to_yaml` now expects.
+
 ## [1.4.1] - 2026-04-14
 
 ### Removed
