@@ -179,24 +179,27 @@ class DataframeInfo:
         """
         return self._columns
 
-    def info(self) -> None:
+    def info(self) -> str:
         """
-        Display a formatted summary of the DataFrame information.
+        Build a formatted summary of DataFrame information.
 
         Calculates dynamic padding to ensure the table remains aligned
         regardless of column name lengths.
 
         Returns
         -------
-        None
+        str
+            The formatted summary text.
         """
-        print(f"Rows: {self.row_count}")
-        print(f"Duplicate rows: {self.duplicate_row_count}")
-        print()
+        lines: list[str] = [
+            f"Rows: {self.row_count}",
+            f"Duplicate rows: {self.duplicate_row_count}",
+            "",
+        ]
 
         if not self.columns:
-            print("No columns found.")
-            return
+            lines.append("No columns found.")
+            return "\n".join(lines)
 
         # --- Dynamic Alignment ---
         max_col_name = max(len(c.name) for c in self.columns)
@@ -209,22 +212,24 @@ class DataframeInfo:
             f"{'Non-null':>{count_width}}   "
             f"{'Data type':<{type_width}}"
         )
-        print(header)
-        print("-" * len(header))
+        lines.append(header)
+        lines.append("-" * len(header))
 
         for c in self.columns:
             dtype_name = getattr(c.data_type, "name", str(c.data_type))
 
-            print(
+            lines.append(
                 f"{c.name:<{name_width}} "
                 f"{c.non_null_count:>{count_width}}   "
                 f"{dtype_name:<{type_width}}"
             )
 
+        return "\n".join(lines)
 
-def analyze_column_data(series: pd.Series, dataframe_column: DataframeColumn) -> None:
+
+def analyze_column_data(series: pd.Series, dataframe_column: DataframeColumn) -> str:
     """
-    Analyze and print detailed statistics for a single DataFrame column.
+    Analyze a single DataFrame column and return detailed statistics.
 
     Displays type information, null counts, and logical composition, such as
     detecting 'integers in disguise' within float columns or numeric strings
@@ -239,15 +244,14 @@ def analyze_column_data(series: pd.Series, dataframe_column: DataframeColumn) ->
 
     Returns
     -------
-    None
-        This function prints results directly to stdout.
+    str
+        The formatted analysis output.
 
     Raises
     ------
     AttributeError
         If the dataframe_column object is missing required attributes.
     """
-    total_len = len(series)
     non_null = series.dropna()
     unique_count = int(series.nunique())
     na_count = int(series.isna().sum())
@@ -293,7 +297,7 @@ def analyze_column_data(series: pd.Series, dataframe_column: DataframeColumn) ->
             lines.append(f"Float strings:      {float_str_count}")
 
     # Output formatting
-    print("\n" + "\n".join(lines))
+    return "\n" + "\n".join(lines)
 
 
 def analyze_dataset(
@@ -309,7 +313,7 @@ def analyze_dataset(
     default_min_binning_unique_values: int = 10,
     max_binning_unique_values: int | dict[str, int] | None = None,
     default_max_binning_unique_values: int = 1000,
-) -> tuple[DataframeInfo, RecommendationManager | None]:
+) -> tuple[DataframeInfo, RecommendationManager | None, dict[str, str]]:
     """
     Perform comprehensive analysis of all columns in a DataFrame.
 
@@ -342,12 +346,12 @@ def analyze_dataset(
         Maximum unique values allowed to consider a column for binning.
     default_max_binning_unique_values : int, default 1000
         Default threshold for maximum binning unique values.
-
     Returns
     -------
-    tuple[DataframeInfo, RecommendationManager | None]
-        A tuple containing the structural metadata (DataframeInfo) and the
-        recommendation engine (RecommendationManager), if generated.
+    tuple[DataframeInfo, RecommendationManager | None, dict[str, str]]
+        A tuple containing the structural metadata (DataframeInfo), the
+        recommendation engine (RecommendationManager), if generated, and a
+        mapping of column names to formatted analysis text.
     """
     from dsr_data_tools.recommendations import RecommendationManager
 
@@ -380,17 +384,12 @@ def analyze_dataset(
         )
 
     # 4. Detailed Per-Column Analysis
+    column_analysis_output: dict[str, str] = {}
     for col_metadata in df_info.columns:
-        analyze_column_data(df[col_metadata.name], col_metadata)
+        col_output = analyze_column_data(df[col_metadata.name], col_metadata)
+        column_analysis_output[col_metadata.name] = col_output
 
-    # 5. Recommendation Summary
-    if manager:
-        print("\n" + "=" * 40)
-        print("RECOMMENDATION SUMMARY")
-        print("=" * 40)
-        manager.execution_summary()
-
-    return df_info, manager
+    return df_info, manager, column_analysis_output
 
 
 def generate_interaction_recommendations(

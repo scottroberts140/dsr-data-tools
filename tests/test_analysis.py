@@ -1,8 +1,12 @@
 import numpy as np
 import pandas as pd
 import pytest
-
-from dsr_data_tools.analysis import DataframeColumn, DataframeInfo, analyze_dataset
+from dsr_data_tools.analysis import (
+    DataframeColumn,
+    DataframeInfo,
+    analyze_column_data,
+    analyze_dataset,
+)
 
 
 @pytest.fixture
@@ -61,34 +65,60 @@ def test_dataframe_info_stats(analysis_df):
 
 
 def test_dataframe_info_output(analysis_df, capsys):
-    """Test the info() print output for dynamic alignment."""
+    """Test info() returned string output for dynamic alignment."""
     info = DataframeInfo(analysis_df)
-    info.info()
+    output = info.info()
 
     captured = capsys.readouterr().out
-    assert "Rows: 3" in captured
-    assert "Column" in captured
-    assert "Non-null" in captured
-    assert "int_col" in captured
+    assert isinstance(output, str)
+    assert "Rows: 3" in output
+    assert "Column" in output
+    assert captured == ""
+    assert "Non-null" in output
+
+
+def test_analyze_column_data_returns_string(analysis_df, capsys):
+    """Verify analyze_column_data returns formatted output without printing."""
+    col = DataframeColumn(name="float_col", non_null_count=2, data_type=float)
+
+    output = analyze_column_data(analysis_df["float_col"], col)
+    captured = capsys.readouterr().out
+
+    assert isinstance(output, str)
+    assert "Column:             float_col" in output
+    assert "N/A count:" in output
+    assert captured == ""
+
+
+def test_analyze_column_data_string_column_output(analysis_df):
+    """Verify analyze_column_data output includes object-specific statistics."""
+    col = DataframeColumn(name="str_col", non_null_count=3, data_type=str)
+
+    output = analyze_column_data(analysis_df["str_col"], col)
+
+    assert "Column:             str_col" in output
+    assert "Numeric strings:" in output
 
 
 ### --- 3. analyze_dataset Tests ---
 
 
 def test_analyze_dataset_basic(analysis_df, capsys):
-    """Ensure orchestrator runs and prints without error."""
-    info, manager = analyze_dataset(analysis_df, generate_recs=False)
+    """Ensure analyze_dataset returns metadata, manager, and column outputs."""
+    info, manager, column_output = analyze_dataset(analysis_df, generate_recs=False)
 
     captured = capsys.readouterr().out
     assert isinstance(info, DataframeInfo)
     assert manager is None
-    assert "Column:             int_col" in captured
+    assert set(column_output.keys()) == {"int_col", "float_col", "str_col", "bool_col"}
+    assert "Column:             int_col" in column_output["int_col"]
+    assert captured == ""
 
 
 def test_analyze_dataset_with_normalization():
     """Verify that normalize_column_names works end-to-end."""
     df = pd.DataFrame({"Dirty Column": [1, 2], "Target Col": [0, 1]})
-    info, _ = analyze_dataset(
+    info, _, _ = analyze_dataset(
         df, target_column="Target Col", normalize_column_names=True
     )
 
@@ -102,9 +132,22 @@ def test_analyze_dataset_with_normalization():
 def test_analyze_dataset_generates_recs(analysis_df):
     """Ensure RecommendationManager is integrated correctly."""
     # float_col has a NaN, should trigger a recommendation
-    info, manager = analyze_dataset(analysis_df, generate_recs=True)
+    info, manager, _ = analyze_dataset(analysis_df, generate_recs=True)
 
     assert manager is not None
     assert len(manager._pipeline) > 0
     # Check if the missing value recommendation for float_col exists
     assert any(r.column_name == "float_col" for r in manager._pipeline)
+
+
+def test_analyze_dataset_returns_column_analysis_output(analysis_df, capsys):
+    """Verify per-column analysis output is always included as third item."""
+    info, manager, column_output = analyze_dataset(analysis_df, generate_recs=False)
+
+    captured = capsys.readouterr().out
+    assert isinstance(info, DataframeInfo)
+    assert manager is None
+    assert isinstance(column_output, dict)
+    assert set(column_output.keys()) == {"int_col", "float_col", "str_col", "bool_col"}
+    assert "Column:             int_col" in column_output["int_col"]
+    assert captured == ""

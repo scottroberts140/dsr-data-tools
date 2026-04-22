@@ -39,7 +39,13 @@ from dsr_data_tools import analyze_dataset
 df = pd.read_csv('data.csv')
 
 # Perform comprehensive analysis
-analyze_dataset(df)
+df_info, manager = analyze_dataset(df)
+
+# info() now returns the formatted summary string
+summary = df_info.info(write_output=False)
+
+# Default behavior is unchanged: write_output=True prints to stdout
+df_info.info()
 ```
 
 ### Datetime Conversion Recommendation
