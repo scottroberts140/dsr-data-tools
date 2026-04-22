@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 1.4.2**: Tightened `RecommendationManager.save_to_yaml` compatibility with the latest `dsr-files` path typing so YAML persistence works cleanly with local paths, cloud paths, and static type checking.
+**Version 2.0.0**: Simplified analysis APIs to be return-only. `DataframeInfo.info()` and `analyze_column_data()` now return strings without printing side effects, and `analyze_dataset()` now returns `(df_info, manager, column_analysis_output)`.
 
 ## Features
 
@@ -26,7 +26,6 @@ Data analysis and exploration tools for exploratory data analysis (EDA).
 
 ```bash
 pip install dsr-data-tools
-pip install dsr-data-tools
 ```
 
 ## Usage
@@ -39,13 +38,16 @@ from dsr_data_tools import analyze_dataset
 df = pd.read_csv('data.csv')
 
 # Perform comprehensive analysis
-df_info, manager = analyze_dataset(df)
+# Returns DataframeInfo, RecommendationManager (or None), and per-column text output
+df_info, manager, column_analysis_output = analyze_dataset(df)
 
-# info() now returns the formatted summary string
-summary = df_info.info(write_output=False)
+# info() returns a formatted summary string
+summary = df_info.info()
+print(summary)
 
-# Default behavior is unchanged: write_output=True prints to stdout
-df_info.info()
+# Access per-column analysis output (example: first available column)
+first_col = next(iter(column_analysis_output))
+print(column_analysis_output[first_col])
 ```
 
 ### Datetime Conversion Recommendation
