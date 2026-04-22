@@ -1,153 +1,119 @@
-# Automated Feature Interaction Recommendations
+# Interaction Recommendations
 
 ## Overview
 
-The `generate_interaction_recommendations()` function automatically identifies meaningful feature combinations based on statistical patterns in your dataset. This helps discover interactions that may improve predictive model performance.
+`generate_interaction_recommendations()` suggests `FeatureInteractionRecommendation` objects from numeric columns using three rule families:
 
-## Three Core Rules
+1. `STATUS_IMPACT`
+2. `RESOURCE_DENSITY`
+3. `PRODUCT_UTILIZATION`
 
-### 1. Status-Impact (Binary × Continuous)
-**Purpose:** Identify how continuous features differ based on binary status variables.
+The function returns recommendations sorted by `priority_score` descending.
 
-**Example:** `Balance × IsActiveMember`
-- Shows how account balance varies between active and inactive members
-- Captures the interaction between wealth and engagement
+## Function Signature
 
-**Criteria:**
-- Binary column: exactly 2 unique values
-- Continuous column: high variance, cardinality > 10
-
-### 2. Resource Density (Continuous / Continuous)
-**Purpose:** Create normalized ratios for financial or resource metrics.
-
-**Example:** `Balance / EstimatedSalary`
-- Represents wealth relative to income
-- More robust than raw balance alone
-- Normalizes for income level differences
-
-**Criteria:**
-- Both columns match financial keywords (balance, salary, income, credit, revenue)
-- Denominator has <10% zero values
-
-### 3. Product Utilization (Count / Duration)
-**Purpose:** Measure adoption velocity and intensity rates.
-
-**Example:** `NumOfProducts / Tenure`
-- Shows how many products per month/year of tenure
-- Distinguishes fast adopters from slow adopters
-
-**Criteria:**
-- Numerator: count-like columns (num*, count*, product*) with ≤20 unique values
-- Denominator: duration-like columns (tenure, age, year, month, day)
-
-## Usage
-
-### Basic Usage
 ```python
-from dsr_data_tools import generate_interaction_recommendations
-
-# Generate all interactions
-interactions = generate_interaction_recommendations(df)
-
-# Display recommendations
-for rec in interactions:
-    rec.info()
-```
-
-### Exclude Target Column
-```python
-# Prevent target variable from being used in interactions
-interactions = generate_interaction_recommendations(
-    df=df,
-    exclude_columns=['Exited', 'Target']
+generate_interaction_recommendations(
+    df,
+    target_column=None,
+    top_n=20,
+    exclude_columns=None,
+    random_state=42,
 )
 ```
 
-### Apply Interactions to Dataset
-```python
-# Recommendations are editable before applying
-df_with_interactions = df.copy()
+## Selection and Exclusions
 
-for rec in interactions:
-    # Optionally customize the derived feature name
-    rec.derived_name = f"custom_{rec.derived_name}"
-    
-    # Apply to dataset
-    df_with_interactions = rec.apply(df_with_interactions)
+The algorithm starts from numeric columns only and excludes likely identifier fields by keyword:
 
-# New columns are now available for model training
-print(df_with_interactions.columns)
-```
+1. `id`
+2. `row`
+3. `index`
+4. `number`
+5. `code`
 
-### Selective Application
-```python
-# Apply only interactions of a specific type
-from dsr_data_tools import InteractionType
+It also excludes any columns passed via `exclude_columns`.
 
-resource_density_only = [
-    rec for rec in interactions 
-    if rec.interaction_type == InteractionType.RESOURCE_DENSITY
-]
+If fewer than two usable numeric columns remain, it returns an empty list.
 
-for rec in resource_density_only:
-    df = rec.apply(df)
-```
+## Rule Families
 
-## Output Format
+### 1. Status-Impact
 
-Each recommendation includes:
-- **Type**: Interaction category (STATUS_IMPACT, RESOURCE_DENSITY, PRODUCT_UTILIZATION)
-- **Operation**: multiply (*) or divide (/)
-- **New Feature**: Generated column name (EDITABLE)
-- **Rationale**: Explanation for why this interaction was recommended
+Pattern:
 
-## Example Output (BetaBank Churn Dataset)
+1. Binary column (`nunique() == 2`)
+2. High-variance numeric column (`nunique() > 10`, variance above 60th percentile)
+3. Operation: multiplication (`*`)
 
-```
-Total interactions identified: 10
+If `target_column` is provided, binary columns are filtered by mutual information strength (above median MI).
 
-STATUS IMPACT (6 interactions)
-- Balance × IsActiveMember: How balance differs by member activity
-- CreditScore × IsActiveMember: How credit differs by member activity
-- EstimatedSalary × IsActiveMember: Income differences by activity status
+### 2. Resource-Density
 
-RESOURCE DENSITY (2 interactions)
-- Balance / EstimatedSalary: Wealth-to-income ratio
-- CreditScore / EstimatedSalary: Credit-to-income ratio
+Pattern:
 
-PRODUCT UTILIZATION (2 interactions)
-- NumOfProducts / Tenure: Products per year of tenure
-- NumOfProducts / Age: Products as percentage of customer age
-```
+1. Two continuous columns (`nunique() > 20`)
+2. Absolute correlation > 0.7
+3. Denominator non-zero ratio > 0.9
+4. Operation: division (`/`)
 
-## Implementation Notes
+Priority score is correlation magnitude.
 
-### Automatic Exclusions
-- ID columns (RowNumber, CustomerId, etc.)
-- Non-numeric columns
-- Specified exclusion list
+### 3. Product-Utilization
 
-### Division Safety
-- Columns with >10% zeros are skipped for denominator
-- Results with NaN are preserved for later handling
+Pattern:
 
-### Editable Design
-All recommendations are fully editable before applying:
-- Change derived feature names
-- Customize operations
-- Adjust rationale
+1. Discrete count-like column (`2 < nunique() <= 20`)
+2. Continuous duration/resource-like column (`nunique() > 20`)
+3. Denominator non-zero ratio >= 0.9
+4. Operation: division (`/`)
 
-## Integration with Data Preparation
+If `target_column` is provided, interaction score is mutual information between the computed rate feature and the target.
 
-Interaction recommendations are separate from basic data preparation to allow:
-1. First apply standard preparation (missing values, encoding, etc.)
-2. Then analyze the prepared dataset for interactions
-3. Apply selected interactions for model training
+## Usage
 
 ```python
-# Workflow
-df_prepared = ddt.apply_recommendations(df, recommendations)
-interactions = ddt.generate_interaction_recommendations(df_prepared, exclude_columns=['Target'])
-df_final = apply_interactions(df_prepared, selected_interactions)
+from dsr_data_tools import generate_interaction_recommendations
+
+recs = generate_interaction_recommendations(
+    df,
+    target_column="target",
+    top_n=20,
+    exclude_columns=["target"],
+    random_state=42,
+)
+
+for rec in recs:
+    rec.info()
 ```
+
+## Applying Suggested Interactions
+
+Recommendations are editable before apply.
+
+```python
+df_out = df.copy()
+for rec in recs:
+    # Optional override
+    rec.derived_name = f"feat_{rec.derived_name}"
+    df_out = rec.apply(df_out)
+```
+
+## Return Type
+
+Each returned item is a `FeatureInteractionRecommendation` containing:
+
+1. `column_name`
+2. `column_name_2`
+3. `interaction_type`
+4. `operation`
+5. `description`
+6. `rationale`
+7. `priority_score`
+
+## Notes
+
+1. `top_n=None` returns all generated interactions.
+2. Division interactions replace denominator zeros with `NaN` at apply time.
+3. Interaction recommendation generation is independent from `RecommendationManager.generate_recommendations()`.
 

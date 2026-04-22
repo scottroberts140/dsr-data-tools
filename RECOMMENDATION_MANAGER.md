@@ -1,137 +1,130 @@
-# RecommendationManager Class
+# RecommendationManager
 
 ## Overview
 
-The `RecommendationManager` class provides a sophisticated pipeline management system for dataset preparation recommendations. It handles logical insertion, validation, and coordinated application of recommendations with automatic cleanup.
+`RecommendationManager` is the orchestration layer for data preparation recommendations in `dsr_data_tools`.
 
-## Key Features
+It provides:
 
-### 1. **Unique Identification**
+1. Pipeline storage and ordering
+2. Validation before execution
+3. Controlled application to a DataFrame
+4. YAML persistence for human-in-the-loop editing
 
-- Each recommendation receives an auto-generated unique ID (e.g., `rec_8aa52948`)
-- IDs enable logical insertion without index knowledge
-- IDs persist across pipeline operations
+## Core Behaviors
 
-### 2. **Logical Insertion (`add_after`)**
+### Stable recommendation IDs
 
-- Insert recommendations after a target by ID rather than by index
-- Eliminates index management burden
-- Raises `ValueError` if target ID not found
+Recommendation IDs are deterministic for the same class and identity-defining fields. This makes IDs stable across runs and useful for YAML-based review/edit workflows.
+
+### Pipeline ordering
+
+Recommendations are executed by `EXECUTION_PRIORITY` (lower number executes first), then deterministically by `column_name` within a priority group.
+
+### Validation before execution
+
+Before `apply()`, `_validate_pipeline()` checks:
+
+1. Referenced source columns exist
+2. A recommendation does not depend on columns dropped earlier
+3. Output column overwrite rules are respected
+
+### Execution and cleanup
+
+`apply()` can run in-place or on a copy. After transforms, source columns used by these recommendation types are collected for cleanup:
+
+1. `DATETIME_CONVERSION`
+2. `FEATURE_EXTRACTION`
+3. `ENCODING`
+
+## API Surface
+
+### Build and organize
+
+1. `add(recommendation | iterable)`
+2. `add_after(target_id, new_rec)`
+3. `clear()`
+
+### Inspect and retrieve
+
+1. `len(manager)`
+2. `for rec in manager`
+3. `manager[index]`
+4. `get_by_id(rec_id)`
+5. `get_by_alias(alias)`
+
+### Toggle recommendation state
+
+1. `enable_by_id(rec_id, ok_if_none=False)`
+2. `disable_by_id(rec_id, ok_if_none=False)`
+3. `toggle_enabled_by_id(rec_id, ok_if_none=False)`
+
+### Generate and execute
+
+1. `generate_recommendations(...)`
+2. `apply(df, allow_column_overwrite=False, inplace=False, drop_duplicates=False)`
+3. `execution_summary()`
+
+## Apply Parameters
+
+### `allow_column_overwrite`
+
+Default is `False`.
+
+1. If `False`, writing to an existing output column raises `ValueError`
+2. If `True`, overwrite is allowed only when pipeline dependency checks pass
+3. If dtype changes during overwrite, `TypeError` is raised
+
+### `inplace`
+
+1. `False` (default): apply on a copy
+2. `True`: mutate the input DataFrame directly
+
+### `drop_duplicates`
+
+1. `False` (default): preserve row duplicates
+2. `True`: drop duplicates before applying the pipeline
+
+## YAML Round-Trip
+
+`RecommendationManager` supports review/edit workflows with:
+
+1. `save_to_yaml(output_dir, filename)`
+2. `load_from_yaml(filepath)`
+
+Current YAML behavior:
+
+1. Top-level keys are recommendation IDs
+2. Read-only fields are written with ` [RO]` suffix
+3. `class_name [RO]` is included to disambiguate classes that share a `rec_type`
+4. Enum fields are deserialized from YAML strings back to enum members
+
+Only editable fields are intended for manual changes (for example: `enabled`, `notes`, `alias`, and other class-specific editable fields).
+
+## Minimal Example
 
 ```python
-manager.add_after(target_id='rec_8aa52948', new_rec=my_recommendation)
-```
-
-### 3. **Validation (`_validate_pipeline`)**
-
-- Checks that no column is dropped before being used by later recommendations
-- Prevents invalid pipelines before execution
-- Provides clear error messages about conflicts
-
-### 4. **Coordinated Application (`apply`)**
-
-The `apply()` method executes recommendations in three phases:
-
-1. **Validation**: Ensures pipeline integrity
-2. **Execution**: Iteratively applies each recommendation
-3. **Cleanup**: Automatically drops processed columns
-
-```python
-result = manager.apply(df)
-```
-
-### 5. **Query Operations**
-
-- `len(manager)`: Get pipeline length
-- `manager[i]`: Access by index
-- `manager.get_by_id(rec_id)`: Retrieve by ID
-- `for rec in manager`: Iterate over recommendations
-
-## Usage Example
-
-```python
-from dsr_data_tools import RecommendationManager, NonInformativeRecommendation
-from dsr_data_tools.enums import RecommendationType
 import pandas as pd
+from dsr_data_tools import RecommendationManager
 
-# Create recommendations
-rec1 = NonInformativeRecommendation(
-    type=RecommendationType.NON_INFORMATIVE,
-    column_name='col1',
-    description='Drop low-variance column',
-    reason='Unique count == row count'
-)
-
-rec2 = NonInformativeRecommendation(
-    type=RecommendationType.NON_INFORMATIVE,
-    column_name='col2',
-    description='Drop high-cardinality column',
-    reason='Cardinality > 0.95 * row count'
-)
-
-# Initialize manager
-manager = RecommendationManager([rec1, rec2])
-
-# Insert additional recommendation after rec1
-rec3 = NonInformativeRecommendation(...)
-manager.add_after(rec1.id, rec3)
-
-# Apply all recommendations
 df = pd.DataFrame({...})
-result = manager.apply(df)
+
+manager = RecommendationManager()
+manager.generate_recommendations(df)
+
+# Optional human-in-the-loop cycle
+path, _ = manager.save_to_yaml(".", "recommendations")
+manager = RecommendationManager.load_from_yaml(path)
+
+result = manager.apply(
+    df,
+    allow_column_overwrite=False,
+    inplace=False,
+    drop_duplicates=False,
+)
 ```
 
-## Implementation Details
+## Notes
 
-### Automatic Column Cleanup
-
-The `apply()` method automatically tracks and drops processed columns:
-
-- **DATETIME_CONVERSION**: Original datetime string column is dropped after conversion
-- **FEATURE_EXTRACTION**: Original datetime column is dropped after feature extraction
-- **ENCODING**: Original categorical column is dropped after encoding
-
-### Error Handling
-
-The class provides comprehensive error handling:
-
-1. **Target Not Found**: `ValueError` when `add_after()` references non-existent ID
-2. **Pipeline Validation Failure**: `ValueError` when column is dropped before being used
-3. **Application Failure**: `RuntimeError` wrapping any exception during `apply()`
-
-### Performance Considerations
-
-- Linear iteration over pipeline (O(n) where n = number of recommendations)
-- Validation is O(n²) in worst case but typically much faster
-- Cleanup deduplicates column drops to avoid redundant operations
-
-## Integration with Dataset Analysis Pipeline
-
-Future integration points:
-
-1. `generate_recommendations()` will return `RecommendationManager` instead of list
-2. Users can insert custom recommendations into the pipeline
-3. Manager coordinates all transformations automatically
-
-## Type Hints
-
-All methods include full type hints for IDE support:
-
-```python
-def add_after(self, target_id: str, new_rec: Recommendation) -> None:
-    """Insert a recommendation after a target by ID."""
-    
-def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-    """Apply all recommendations with validation and cleanup."""
-    
-def get_by_id(self, rec_id: str) -> Recommendation | None:
-    """Retrieve a recommendation by its ID."""
-```
-
-## Future Enhancements
-
-1. **Priority-Based Execution**: Execute high-priority recommendations first
-2. **Conditional Recommendations**: Skip recommendations based on column properties
-3. **Rollback Support**: Checkpoint before each recommendation for rollback capability
-4. **Performance Metrics**: Track execution time and data shape changes per recommendation
-5. **Parallel Execution**: Execute independent recommendations concurrently
+1. If any recommendation fails during execution, `apply()` raises a manager-level `RuntimeError` with recommendation context.
+2. If recommendations are generated and validation detects structural issues, warnings are attached to `execution_summary()` output.

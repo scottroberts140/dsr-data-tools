@@ -4,13 +4,14 @@ import hashlib
 import json
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, cast
+from typing import TYPE_CHECKING, Any, Iterable, cast, get_args, get_origin
 
 from cloudpathlib import CloudPath
 from dsr_files.utils import PathLike
-from dsr_files.yaml_handler import save_yaml
+from dsr_files.yaml_handler import load_yaml, save_yaml
 
 if TYPE_CHECKING:
     from dsr_data_tools.recommendations import RecommendationManager
@@ -5001,6 +5002,218 @@ class RecommendationManager:
 
     from dataclasses import fields
 
+    @staticmethod
+    def _recommendation_class_map() -> dict[
+        RecommendationType, list[type[Recommendation]]
+    ]:
+        """Return a mapping from recommendation type to candidate concrete classes."""
+        return {
+            RecommendationType.NON_INFORMATIVE: [NonInformativeRecommendation],
+            RecommendationType.MISSING_VALUES: [MissingValuesRecommendation],
+            RecommendationType.ENCODING: [EncodingRecommendation],
+            RecommendationType.CLASS_IMBALANCE: [ClassImbalanceRecommendation],
+            RecommendationType.OUTLIER_DETECTION: [OutlierDetectionRecommendation],
+            RecommendationType.OUTLIER_HANDLING: [OutlierHandlingRecommendation],
+            RecommendationType.CATEGORICAL_CONVERSION: [
+                CategoricalConversionRecommendation
+            ],
+            RecommendationType.BOOLEAN_CLASSIFICATION: [
+                BooleanClassificationRecommendation
+            ],
+            RecommendationType.BINNING: [BinningRecommendation],
+            RecommendationType.INT_CONVERSION: [IntegerConversionRecommendation],
+            RecommendationType.FLOAT_CONVERSION: [FloatConversionRecommendation],
+            RecommendationType.DECIMAL_PRECISION_OPTIMIZATION: [
+                DecimalPrecisionRecommendation
+            ],
+            RecommendationType.VALUE_REPLACEMENT: [ValueReplacementRecommendation],
+            RecommendationType.FEATURE_INTERACTION: [FeatureInteractionRecommendation],
+            RecommendationType.DATETIME_CONVERSION: [DatetimeConversionRecommendation],
+            RecommendationType.FEATURE_EXTRACTION: [
+                FeatureExtractionRecommendation,
+                DatetimeDurationRecommendation,
+            ],
+            RecommendationType.FEATURE_AGGREGATION: [AggregationRecommendation],
+        }
+
+    @staticmethod
+    def _resolve_recommendation_class(
+        rec_type: RecommendationType,
+        normalized: dict[str, Any],
+        class_map: dict[RecommendationType, list[type[Recommendation]]],
+    ) -> type[Recommendation]:
+        """Resolve the concrete recommendation class for a YAML payload."""
+        candidates = class_map.get(rec_type)
+        if not candidates:
+            raise ValueError(
+                f"No recommendation class registered for type {rec_type.name}"
+            )
+
+        class_name = normalized.get("class_name")
+        if isinstance(class_name, str):
+            for candidate in candidates:
+                if candidate.__name__ == class_name:
+                    return candidate
+
+        payload_keys = set(normalized.keys())
+        base_fields = {
+            "column_name",
+            "description",
+            "notes",
+            "enabled",
+            "alias",
+            "is_locked",
+        }
+
+        best_candidate = candidates[0]
+        best_score = -1
+        for candidate in candidates:
+            candidate_fields = [f for f in fields(candidate) if f.init]
+            required_missing = [
+                f.name
+                for f in candidate_fields
+                if f.default is MISSING
+                and f.default_factory is MISSING
+                and f.name not in payload_keys
+            ]
+            if required_missing:
+                continue
+
+            specific_fields = {f.name for f in candidate_fields} - base_fields
+            score = len(specific_fields & payload_keys)
+            if score > best_score:
+                best_candidate = candidate
+                best_score = score
+
+        return best_candidate
+
+    @staticmethod
+    def _deserialize_value(annotation: Any, value: Any) -> Any:
+        """Convert YAML-loaded values to field-expected types for dataclass init."""
+        if value is None:
+            return None
+
+        origin = get_origin(annotation)
+        if origin is None:
+            if isinstance(annotation, type) and issubclass(annotation, Enum):
+                if isinstance(value, str):
+                    normalized = value.strip().upper()
+                    for member in annotation:
+                        if member.name.upper() == normalized:
+                            return member
+                        if str(member.value).upper() == normalized:
+                            return member
+                return value
+            return value
+
+        if origin is list:
+            (item_type,) = get_args(annotation) or (Any,)
+            if isinstance(value, list):
+                return [
+                    RecommendationManager._deserialize_value(item_type, item)
+                    for item in value
+                ]
+            return value
+
+        if origin is dict:
+            key_type, val_type = get_args(annotation) or (Any, Any)
+            if isinstance(value, dict):
+                return {
+                    RecommendationManager._deserialize_value(
+                        key_type, k
+                    ): RecommendationManager._deserialize_value(val_type, v)
+                    for k, v in value.items()
+                }
+            return value
+
+        if origin in (tuple, set):
+            return value
+
+        if origin is not None:
+            for arg in get_args(annotation):
+                if arg is type(None):
+                    continue
+                converted = RecommendationManager._deserialize_value(arg, value)
+                if converted is not value:
+                    return converted
+            return value
+
+        return value
+
+    @classmethod
+    def load_from_yaml(cls, filepath: PathLike) -> "RecommendationManager":
+        """
+        Load recommendations from YAML into a new RecommendationManager.
+
+        Parameters
+        ----------
+        filepath : PathLike
+            Path to a recommendations YAML file created by ``save_to_yaml``.
+
+        Returns
+        -------
+        RecommendationManager
+            Manager populated with deserialized recommendation objects.
+        """
+        payload, _ = load_yaml(filepath)
+        if not isinstance(payload, dict):
+            raise ValueError("recommendations.yaml must contain a mapping of IDs")
+
+        class_map = cls._recommendation_class_map()
+        recommendations: list[Recommendation] = []
+        seen_ids: set[str] = set()
+
+        for rec_id, rec_data in payload.items():
+            if not isinstance(rec_id, str):
+                raise ValueError("Recommendation IDs must be strings")
+            if rec_id in seen_ids:
+                raise ValueError(f"Duplicate recommendation ID found: {rec_id}")
+            seen_ids.add(rec_id)
+
+            if not isinstance(rec_data, dict):
+                raise ValueError(f"Recommendation '{rec_id}' must map to a dictionary")
+
+            normalized = {}
+            for key, value in rec_data.items():
+                if not isinstance(key, str):
+                    continue
+                clean_key = key[:-5] if key.endswith(" [RO]") else key
+                normalized[clean_key] = value
+
+            rec_type_raw = normalized.get("rec_type")
+            if not isinstance(rec_type_raw, str):
+                raise ValueError(f"Recommendation '{rec_id}' is missing rec_type")
+
+            try:
+                rec_type = RecommendationType[rec_type_raw]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Recommendation '{rec_id}' has unsupported rec_type '{rec_type_raw}'"
+                ) from exc
+
+            rec_cls = cls._resolve_recommendation_class(
+                rec_type=rec_type,
+                normalized=normalized,
+                class_map=class_map,
+            )
+
+            init_kwargs: dict[str, Any] = {}
+            for field_def in fields(rec_cls):
+                if not field_def.init:
+                    continue
+                field_name = field_def.name
+                if field_name in normalized:
+                    init_kwargs[field_name] = cls._deserialize_value(
+                        field_def.type, normalized[field_name]
+                    )
+
+            recommendation = rec_cls(**init_kwargs)
+            object.__setattr__(recommendation, "id", rec_id)
+            object.__setattr__(recommendation, "_locked", True)
+            recommendations.append(recommendation)
+
+        return cls(recommendations=recommendations)
+
     def save_to_yaml(
         self, output_dir: PathLike, filename: str
     ) -> tuple[Path | CloudPath, dict[str, Any]]:
@@ -5046,6 +5259,9 @@ class RecommendationManager:
                     processed_rec[key] = value
                 else:
                     processed_rec[f"{key} [RO]"] = value
+
+            # Helps resolve concrete class when multiple classes share rec_type.
+            processed_rec["class_name [RO]"] = rec.__class__.__name__
 
             data[rec.id] = processed_rec
 
