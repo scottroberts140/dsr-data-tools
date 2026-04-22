@@ -4356,6 +4356,8 @@ class RecommendationManager:
                 column_name=col_name,
                 description=f"Handle {null_count} missing values in '{col_name}' using {strategy.name} strategy.",
                 strategy=strategy,
+                missing_count=null_count,
+                missing_percentage=null_ratio,
             )
             self._pipeline.append(rec_mv)
 
