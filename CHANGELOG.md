@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-04-22
+
+### Breaking
+
+* **Return-Only Output APIs**: `DataframeInfo.info()` no longer prints to stdout and now returns a formatted `str` only.
+
+* **Column Analysis Output APIs**: `analyze_column_data()` no longer prints to stdout and now returns a formatted `str` only.
+
+* **Dataset Analysis Return Shape**: `analyze_dataset()` now always returns a three-item tuple:
+  * `df_info`
+  * `manager`
+  * `column_analysis_output: dict[str, str]`
+
+### Changed
+
+* **Structured Column Output**: Per-column analysis strings are now captured and exposed as structured data for downstream orchestration/reporting workflows.
+
+* **Documentation and Tests**: Updated examples and unit tests to align with return-only behavior and the new `analyze_dataset()` tuple shape.
+
 ## [1.4.2] - 2026-04-21
 
 ### Fixed
