@@ -404,8 +404,8 @@ class MissingValuesRecommendation(Recommendation):
         """
         return RecommendationType.MISSING_VALUES
 
-    missing_count: int = field(default=0, metadata={"editable": True})
-    missing_percentage: float = field(default=0.0, metadata={"editable": True})
+    missing_count: int = field(default=0, metadata={"editable": False})
+    missing_percentage: float = field(default=0.0, metadata={"editable": False})
     strategy: MissingValueStrategy = field(
         default=MissingValueStrategy.IMPUTE_MEAN, metadata={"editable": True}
     )
@@ -590,7 +590,7 @@ class EncodingRecommendation(Recommendation):
     encoder_type: EncodingStrategy = field(
         default=EncodingStrategy.ONEHOT, metadata={"editable": True}
     )
-    unique_values: int = field(default=0, metadata={"editable": True})
+    unique_values: int = field(default=0, metadata={"editable": False})
 
     @classmethod
     def get_by_id(
@@ -748,7 +748,7 @@ class ClassImbalanceRecommendation(Recommendation):
         """
         return RecommendationType.CLASS_IMBALANCE
 
-    majority_percentage: float = field(default=0.0, metadata={"editable": True})
+    majority_percentage: float = field(default=0.0, metadata={"editable": False})
     strategy: ImbalanceStrategy = field(
         default=ImbalanceStrategy.SMOTE, metadata={"editable": True}
     )
@@ -869,8 +869,8 @@ class OutlierDetectionRecommendation(Recommendation):
     strategy: OutlierStrategy = field(
         default=OutlierStrategy.SCALING, metadata={"editable": True}
     )
-    max_value: float = field(default=0.0, metadata={"editable": True})
-    mean_value: float = field(default=0.0, metadata={"editable": True})
+    max_value: float = field(default=0.0, metadata={"editable": False})
+    mean_value: float = field(default=0.0, metadata={"editable": False})
 
     @classmethod
     def get_by_id(
@@ -1020,8 +1020,8 @@ class OutlierHandlingRecommendation(Recommendation):
     strategy: OutlierHandlingStrategy = field(
         default=OutlierHandlingStrategy.CLIP, metadata={"editable": True}
     )
-    lower_bound: float = field(default=0.0, metadata={"editable": True})
-    upper_bound: float = field(default=0.0, metadata={"editable": True})
+    lower_bound: float = field(default=0.0, metadata={"editable": False})
+    upper_bound: float = field(default=0.0, metadata={"editable": False})
 
     @classmethod
     def get_by_id(
@@ -1156,7 +1156,7 @@ class CategoricalConversionRecommendation(Recommendation):
         """
         return RecommendationType.CATEGORICAL_CONVERSION
 
-    unique_values: int = field(default=0, metadata={"editable": True})
+    unique_values: int = field(default=0, metadata={"editable": False})
 
     @classmethod
     def get_by_id(
@@ -1261,7 +1261,7 @@ class BooleanClassificationRecommendation(Recommendation):
         """
         return RecommendationType.BOOLEAN_CLASSIFICATION
 
-    values: list[Any] = field(default_factory=list, metadata={"editable": True})
+    values: list[Any] = field(default_factory=list, metadata={"editable": False})
 
     @classmethod
     def get_by_id(
@@ -1531,7 +1531,7 @@ class IntegerConversionRecommendation(Recommendation):
         return RecommendationType.INT_CONVERSION
 
     target_depth: BitDepth = field(default=BitDepth.INT32, metadata={"editable": True})
-    integer_count: int = field(default=0, metadata={"editable": True})
+    integer_count: int = field(default=0, metadata={"editable": False})
 
     @classmethod
     def get_by_id(
@@ -1780,8 +1780,8 @@ class DecimalPrecisionRecommendation(Recommendation):
         return RecommendationType.DECIMAL_PRECISION_OPTIMIZATION
 
     max_decimal_places: int = field(default=0, metadata={"editable": True})
-    min_value: float = field(default=0.0, metadata={"editable": True})
-    max_value: float = field(default=0.0, metadata={"editable": True})
+    min_value: float = field(default=0.0, metadata={"editable": False})
+    max_value: float = field(default=0.0, metadata={"editable": False})
     convert_to_int: bool = field(default=False, metadata={"editable": True})
     rounding_mode: RoundingMode = field(
         default=RoundingMode.NEAREST, metadata={"editable": True}
@@ -1948,9 +1948,9 @@ class ValueReplacementRecommendation(Recommendation):
         return RecommendationType.VALUE_REPLACEMENT
 
     non_numeric_values: list[str] = field(
-        default_factory=list, metadata={"editable": True}
+        default_factory=list, metadata={"editable": False}
     )
-    non_numeric_count: int = field(default=0, metadata={"editable": True})
+    non_numeric_count: int = field(default=0, metadata={"editable": False})
     replacement_value: float | str = field(default=np.nan, metadata={"editable": True})
 
     @classmethod
@@ -2089,14 +2089,14 @@ class FeatureInteractionRecommendation(Recommendation):
         """
         return RecommendationType.FEATURE_INTERACTION
 
-    column_name_2: str = field(default="", metadata={"editable": True})
+    column_name_2: str = field(default="", metadata={"editable": False})
     interaction_type: InteractionType = field(
         default=InteractionType.STATUS_IMPACT, metadata={"editable": True}
     )
     operation: str = field(default="*", metadata={"editable": True})
     rationale: str = field(default="", metadata={"editable": True})
     derived_name: str = field(default="", metadata={"editable": True})
-    priority_score: float = field(default=0.0, metadata={"editable": True})
+    priority_score: float = field(default=0.0, metadata={"editable": False})
 
     @classmethod
     def get_by_id(
@@ -2699,7 +2699,7 @@ class AggregationRecommendation(Recommendation):
     agg_columns: list[str] = field(default_factory=list, metadata={"editable": True})
     agg_op: str = field(default="sum", metadata={"editable": True})
     output_column: str = field(default="", metadata={"editable": True})
-    validation_mismatch_count: int = field(default=0, metadata={"editable": True})
+    validation_mismatch_count: int = field(default=0, metadata={"editable": False})
     decimal_places: int | None = field(default=None, metadata={"editable": True})
     rounding_mode: RoundingMode = field(
         default=RoundingMode.NEAREST, metadata={"editable": True}
