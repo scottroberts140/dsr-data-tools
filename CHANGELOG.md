@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-04-22
+
+### Added
+
+* **Recommendation YAML Rehydration**: Added `RecommendationManager.load_from_yaml()` to reconstruct recommendation pipelines from persisted YAML files.
+
+### Changed
+
+* **YAML Class Resolution**: Improved class resolution for recommendation types that share enum values by persisting and consuming class identity metadata.
+* **Enum-Safe Deserialization**: Added field-aware enum deserialization so editable YAML values are restored to typed enum members.
+* **Documentation Refresh**: Updated recommendation manager, overwrite behavior, info output, and interaction recommendation guides to match current implementation behavior.
+
+### Fixed
+
+* **Round-Trip Reliability**: Ensured recommendation IDs, editable fields, and class-specific attributes survive save/load cycles used by orchestration workflows.
+
 ## [2.0.0] - 2026-04-22
 
 ### Breaking

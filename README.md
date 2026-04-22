@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 2.0.0**: Simplified analysis APIs to be return-only. `DataframeInfo.info()` and `analyze_column_data()` now return strings without printing side effects, and `analyze_dataset()` now returns `(df_info, manager, column_analysis_output)`.
+**Version 2.1.0**: Added robust YAML round-trip support via `RecommendationManager.load_from_yaml()`, including enum-safe deserialization and concrete class resolution for persisted recommendations.
 
 ## Features
 
