@@ -23,6 +23,7 @@ from dsr_data_tools.enums import (
     RecommendationType,
     RoundingMode,
 )
+from dsr_data_tools.preprocessing import apply_preprocessing
 from dsr_data_tools.recommendations import (
     AggregationRecommendation,
     BinningRecommendation,
@@ -52,6 +53,7 @@ __all__ = [
     "DataframeInfo",
     "analyze_column_data",
     "analyze_dataset",
+    "apply_preprocessing",
     "generate_interaction_recommendations",
     "RecommendationManager",
     "Recommendation",
