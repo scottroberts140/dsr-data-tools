@@ -25,7 +25,7 @@ dependencies = [
     "dsr-files>=3.1.1",
     "dsr-utils>=1.4.0",
     "numpy>=2.4.4",
-    "pandas>=3.0.2",
+    "pandas>=2.2.0,<3.0.0",
     "scikit-learn>=1.8.0",
 ]
 
