@@ -16,6 +16,9 @@ def apply_preprocessing(
     group_by_frequency
         Keep the top-N most frequent categories and collapse all others
         into an ``other_label`` bucket.
+    min_frequency
+        Collapse categories whose frequency (count or proportion) falls
+        below a threshold into an ``other_label`` bucket.
 
     Parameters
     ----------
@@ -52,6 +55,13 @@ def apply_preprocessing(
                 out_df, column_name, group_config
             )
             msgs.extend(group_msgs)
+
+        min_freq_config = column_config.get("min_frequency")
+        if min_freq_config is not None:
+            out_df, min_freq_msgs = _apply_min_frequency(
+                out_df, column_name, min_freq_config
+            )
+            msgs.extend(min_freq_msgs)
 
     return out_df, msgs
 
@@ -95,3 +105,68 @@ def _apply_group_by_frequency(
         f"🧩 {column_name}: grouped {grouped_count} categories into '{other_label}' (top_n={top_n})."
     )
     return grouped_df, msgs
+
+
+def _apply_min_frequency(
+    df: pd.DataFrame, column_name: str, config: dict[str, Any]
+) -> tuple[pd.DataFrame, list[str]]:
+    """Collapse categories below a minimum frequency threshold into an other bucket.
+
+    Parameters
+    ----------
+    config : dict
+        ``threshold`` : int or float, required
+            Minimum count (int >= 1) or proportion (float in (0, 1)) a
+            category must reach to be kept.
+        ``other_label`` : str, optional, default ``"Other"``
+            Label assigned to collapsed categories.
+    """
+    msgs: list[str] = []
+
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"Invalid 'min_frequency' config for '{column_name}': expected a mapping."
+        )
+
+    threshold = config.get("threshold")
+    if threshold is None:
+        raise ValueError(
+            f"'min_frequency' config for '{column_name}' requires a 'threshold' key."
+        )
+
+    other_label = config.get("other_label", "Other")
+
+    total = len(df)
+    value_counts = df[column_name].value_counts(dropna=False)
+
+    if isinstance(threshold, float) and 0.0 < threshold < 1.0:
+        # Proportion mode: convert to absolute count
+        min_count = threshold * total
+    elif isinstance(threshold, int) and threshold >= 1:
+        min_count = float(threshold)
+    else:
+        raise ValueError(
+            f"Invalid threshold for '{column_name}': expected int >= 1 or float in (0, 1), "
+            f"got {threshold!r}."
+        )
+
+    keep_values = value_counts[value_counts >= min_count].index
+    collapsed_count = (value_counts < min_count).sum()
+
+    if collapsed_count == 0:
+        msgs.append(
+            f"ℹ️ {column_name}: no categories below min_frequency threshold "
+            f"(threshold={threshold})."
+        )
+        return df, msgs
+
+    out_df = df.copy()
+    out_df[column_name] = out_df[column_name].where(
+        out_df[column_name].isin(keep_values), other_label
+    )
+
+    msgs.append(
+        f"🧩 {column_name}: collapsed {collapsed_count} rare categories into "
+        f"'{other_label}' (threshold={threshold})."
+    )
+    return out_df, msgs
