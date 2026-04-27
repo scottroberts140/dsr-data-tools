@@ -19,6 +19,9 @@ def apply_preprocessing(
     min_frequency
         Collapse categories whose frequency (count or proportion) falls
         below a threshold into an ``other_label`` bucket.
+    bucketing
+        Discretize a numeric column into explicit, user-defined bins using
+        provided edges and optional labels.
 
     Parameters
     ----------
@@ -62,6 +65,13 @@ def apply_preprocessing(
                 out_df, column_name, min_freq_config
             )
             msgs.extend(min_freq_msgs)
+
+        bucketing_config = column_config.get("bucketing")
+        if bucketing_config is not None:
+            out_df, bucketing_msgs = _apply_bucketing(
+                out_df, column_name, bucketing_config
+            )
+            msgs.extend(bucketing_msgs)
 
     return out_df, msgs
 
@@ -168,5 +178,72 @@ def _apply_min_frequency(
     msgs.append(
         f"🧩 {column_name}: collapsed {collapsed_count} rare categories into "
         f"'{other_label}' (threshold={threshold})."
+    )
+    return out_df, msgs
+
+
+def _apply_bucketing(
+    df: pd.DataFrame, column_name: str, config: dict[str, Any]
+) -> tuple[pd.DataFrame, list[str]]:
+    """Discretize a numeric column into explicit user-defined bins.
+
+    Parameters
+    ----------
+    config : dict
+        ``edges`` : list of int or float, required
+            Monotonically increasing bin boundary values.  N edges produce
+            N-1 bins (e.g. ``[0, 25, 50, 100]`` → three bins).
+        ``labels`` : list of str, optional
+            One label per bin.  When omitted, interval notation is used
+            (e.g. ``"(25, 50]"``).
+        ``right`` : bool, optional, default ``True``
+            Whether intervals are closed on the right.
+        ``include_lowest`` : bool, optional, default ``True``
+            Whether the leftmost edge is included in the first bin.
+    """
+    msgs: list[str] = []
+
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"Invalid 'bucketing' config for '{column_name}': expected a mapping."
+        )
+
+    edges = config.get("edges")
+    if edges is None:
+        raise ValueError(
+            f"'bucketing' config for '{column_name}' requires an 'edges' key."
+        )
+
+    if not isinstance(edges, list) or len(edges) < 2:
+        raise ValueError(
+            f"'edges' for '{column_name}' must be a list of at least 2 values, "
+            f"got {edges!r}."
+        )
+
+    labels = config.get("labels")
+    right = config.get("right", True)
+    include_lowest = config.get("include_lowest", True)
+
+    n_bins = len(edges) - 1
+    if labels is not None:
+        if not isinstance(labels, list) or len(labels) != n_bins:
+            raise ValueError(
+                f"'labels' for '{column_name}' must be a list of {n_bins} strings "
+                f"(one per bin), got {labels!r}."
+            )
+
+    out_df = df.copy()
+    out_df[column_name] = pd.cut(
+        out_df[column_name],
+        bins=edges,
+        labels=labels,
+        right=right,
+        include_lowest=include_lowest,
+    )
+
+    label_desc = f"labels={labels}" if labels else f"{n_bins} interval bins"
+    msgs.append(
+        f"🪣 {column_name}: bucketed into {n_bins} bins "
+        f"(edges={edges}, {label_desc})."
     )
     return out_df, msgs
