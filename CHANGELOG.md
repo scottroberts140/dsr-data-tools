@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+* **Bucketing Message Formatting**: Normalized `_apply_bucketing` status message formatting to a single stable line for clearer logging output and snapshot diff readability.
+
+### Fixed
+
+* **Preprocessing Regression Coverage**: Strengthened preprocessing unit tests around bucketing outputs and message assertions to reduce formatting-related false negatives in CI.
+
 ## [2.1.0] - 2026-04-22
 
 ### Added
