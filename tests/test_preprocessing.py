@@ -144,6 +144,7 @@ def test_min_frequency_and_group_by_frequency_compose():
 # bucketing tests
 # ---------------------------------------------------------------------------
 
+
 def test_bucketing_assigns_interval_labels_by_default():
     df = pd.DataFrame({"age": [5, 20, 35, 55, 80]})
     transformed, msgs = apply_preprocessing(
@@ -154,11 +155,11 @@ def test_bucketing_assigns_interval_labels_by_default():
     # and emits float edges; verify grouping is correct via the category codes
     result = transformed["age"].tolist()
     codes = [v.mid for v in result]
-    assert codes[0] < 18           # 5 → first bin
-    assert 18 < codes[1] <= 40     # 20 → second bin
-    assert 18 < codes[2] <= 40     # 35 → second bin
-    assert 40 < codes[3] <= 65     # 55 → third bin
-    assert 65 < codes[4] <= 100    # 80 → fourth bin
+    assert codes[0] < 18  # 5 → first bin
+    assert 18 < codes[1] <= 40  # 20 → second bin
+    assert 18 < codes[2] <= 40  # 35 → second bin
+    assert 40 < codes[3] <= 65  # 55 → third bin
+    assert 65 < codes[4] <= 100  # 80 → fourth bin
     assert any("bucketed into 4 bins" in msg for msg in msgs)
 
 
@@ -176,7 +177,11 @@ def test_bucketing_uses_custom_labels():
         },
     )
     assert transformed["age"].tolist() == [
-        "Child", "Young Adult", "Young Adult", "Adult", "Senior"
+        "Child",
+        "Young Adult",
+        "Young Adult",
+        "Adult",
+        "Senior",
     ]
     assert any("labels=" in msg for msg in msgs)
 

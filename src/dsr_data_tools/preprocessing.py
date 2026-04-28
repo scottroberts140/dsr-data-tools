@@ -243,7 +243,6 @@ def _apply_bucketing(
 
     label_desc = f"labels={labels}" if labels else f"{n_bins} interval bins"
     msgs.append(
-        f"🪣 {column_name}: bucketed into {n_bins} bins "
-        f"(edges={edges}, {label_desc})."
+        f"🪣 {column_name}: bucketed into {n_bins} bins (edges={edges}, {label_desc})."
     )
     return out_df, msgs
