@@ -1,6 +1,7 @@
 # RecommendationManager Exploration Report
 
 ## Overview
+
 The `RecommendationManager` is the orchestration layer for data preparation recommendations in `dsr_data_tools`. It manages a pipeline of transformation suggestions, handles their execution order, and supports human-in-the-loop review via YAML persistence.
 
 ---
@@ -43,6 +44,7 @@ class Recommendation(ABC):
 ### Concrete Recommendation Examples
 
 **NonInformativeRecommendation** (Drop columns):
+
 ```python
 @dataclass
 class NonInformativeRecommendation(Recommendation):
@@ -56,6 +58,7 @@ class NonInformativeRecommendation(Recommendation):
 ```
 
 **MissingValuesRecommendation** (Imputation/removal):
+
 ```python
 @dataclass
 class MissingValuesRecommendation(Recommendation):
@@ -78,6 +81,7 @@ class MissingValuesRecommendation(Recommendation):
 ```
 
 **EncodingRecommendation** (Categorical encoding):
+
 ```python
 @dataclass
 class EncodingRecommendation(Recommendation):
@@ -100,6 +104,7 @@ class EncodingRecommendation(Recommendation):
 ## 2. Read-Only vs Editable Fields
 
 ### Read-Only Fields (Cannot be modified after creation)
+
 These fields are locked after `__post_init__()` and marked with `[RO]` suffix in YAML:
 
 - **`column_name`** — Identity-defining, immutable
@@ -110,6 +115,7 @@ These fields are locked after `__post_init__()` and marked with `[RO]` suffix in
 - **Type-specific diagnostic fields** — e.g., `missing_count`, `missing_percentage`, `unique_values`
 
 **Protection Mechanism:**
+
 ```python
 def __setattr__(self, name: str, value: Any) -> None:
     """Enforces read-only constraints after initialization."""
@@ -122,6 +128,7 @@ def __setattr__(self, name: str, value: Any) -> None:
 ```
 
 ### Editable Fields (Always modifiable)
+
 These fields are whitelist-marked with `metadata={"editable": True}`:
 
 - **`notes`** — User-provided commentary or justification
@@ -136,6 +143,7 @@ These fields are whitelist-marked with `metadata={"editable": True}`:
 ### Retrieve Recommendations
 
 #### By Index (positional)
+
 ```python
 def __getitem__(self, index: int) -> Recommendation:
     """Retrieves a recommendation by its positional index in the pipeline."""
@@ -143,6 +151,7 @@ def __getitem__(self, index: int) -> Recommendation:
 ```
 
 #### By ID (deterministic hash)
+
 ```python
 def get_by_id(self, rec_id: str) -> Recommendation | None:
     """
@@ -155,6 +164,7 @@ def get_by_id(self, rec_id: str) -> Recommendation | None:
 ```
 
 #### By Alias (user-defined label)
+
 ```python
 def get_by_alias(self, alias: str) -> Recommendation | None:
     """
@@ -169,6 +179,7 @@ def get_by_alias(self, alias: str) -> Recommendation | None:
 ```
 
 #### By Column Name (check existence)
+
 ```python
 def _has_recommendation_for_column(self, column_name: str) -> bool:
     """Returns True if one or more recommendations exist for the column."""
@@ -190,6 +201,7 @@ def __iter__(self):
 ### Manage Recommendations
 
 #### Add recommendations
+
 ```python
 def add(self, recommendation: Recommendation | Iterable[Recommendation]) -> None:
     """Adds one or more recommendations to the end of the pipeline."""
@@ -207,6 +219,7 @@ def add_after(self, target_id: str, new_rec: Recommendation) -> None:
 ```
 
 #### Clear pipeline
+
 ```python
 def clear(self) -> None:
     """Removes all recommendations, resetting the pipeline to an empty state."""
@@ -282,6 +295,7 @@ def save_to_yaml(
 ```
 
 **YAML Structure Example:**
+
 ```yaml
 # CAUTION: Do not modify the top-level keys (IDs) or keys marked [RO].
 # Only fields without [RO] (e.g., 'enabled', 'notes') are intended for manual edits.
@@ -341,6 +355,7 @@ def load_from_yaml(cls, filepath: PathLike) -> "RecommendationManager":
 ```
 
 **Deserialization Logic:**
+
 - Enum fields automatically converted from YAML strings back to enum members
 - Read-only fields ignored during loading (preserves audit trail)
 - Only editable fields can be modified and reloaded
@@ -483,7 +498,7 @@ def _get_sorted_pipeline(self) -> list[Recommendation]:
 ## Summary
 
 | Aspect | Details |
-|--------|---------|
+| -------- | --------- |
 | **ID Generation** | Deterministic SHA1 hash based on class + core attributes (stable across runs) |
 | **Read-Only Fields** | `column_name`, `description`, `id`, `is_locked`, `_locked`, type-specific diagnostics |
 | **Editable Fields** | `notes`, `enabled`, `alias`, strategy fields (e.g., `strategy`, `fill_value`) |

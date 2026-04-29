@@ -116,4 +116,3 @@ Each returned item is a `FeatureInteractionRecommendation` containing:
 1. `top_n=None` returns all generated interactions.
 2. Division interactions replace denominator zeros with `NaN` at apply time.
 3. Interaction recommendation generation is independent from `RecommendationManager.generate_recommendations()`.
-
