@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Iterable, cast, get_args, get_origin
 
 from cloudpathlib import CloudPath
 from dsr_files.utils import PathLike
@@ -154,6 +154,7 @@ class Recommendation(ABC):
     enabled: bool = field(default=True, metadata={"editable": True})
     alias: str | None = field(default=None, metadata={"editable": True})
     is_locked: bool = False
+    explicit_stage: int | None = field(default=None, metadata={"editable": True})
     _locked: bool = field(
         default=False, init=False, repr=False, metadata={"editable": False}
     )
@@ -204,6 +205,7 @@ class Recommendation(ABC):
             "description",
             "alias",
             "is_locked",
+            "explicit_stage",
         }
         for field_name in ignored_fields:
             data.pop(field_name, None)
@@ -244,6 +246,36 @@ class Recommendation(ABC):
     def info(self) -> None:
         """Prints a developer/user-friendly summary of the recommendation."""
         pass
+
+    def required_columns(self) -> set[str]:
+        """
+        Returns the set of column names this recommendation requires as input.
+
+        Subclasses that read from additional columns (e.g., a second column for
+        an interaction or a list of aggregate columns) should override this method.
+
+        Returns
+        -------
+        set of str
+            Column names that must exist before this recommendation is applied.
+        """
+        return {self.column_name}
+
+    def produced_columns(self) -> set[str]:
+        """
+        Returns the set of new column names this recommendation creates in the DataFrame.
+
+        The default implementation returns an empty set because most recommendations
+        transform the source column in-place. Subclasses that produce new columns
+        (e.g., feature extraction, aggregation) must override this method.
+
+        Returns
+        -------
+        set of str
+            Column names that will exist in the DataFrame after this recommendation
+            is applied that were not present before.
+        """
+        return set()
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -2199,6 +2231,14 @@ class FeatureInteractionRecommendation(Recommendation):
         print(f"    Rationale: {self.rationale}")
         print(f"    Priority Score: {self.priority_score:.2f}")
 
+    def required_columns(self) -> set[str]:
+        """Returns source columns: the primary column and the secondary interaction column."""
+        return {self.column_name, self.column_name_2}
+
+    def produced_columns(self) -> set[str]:
+        """Returns the derived interaction column name."""
+        return {self.derived_name}
+
 
 @dataclass
 class DatetimeConversionRecommendation(Recommendation):
@@ -2524,6 +2564,50 @@ class FeatureExtractionRecommendation(Recommendation):
         if self.output_columns:
             print(f"    Output columns: {self.output_columns}")
 
+    # Maps each handled DatetimeProperty to its feature_series key in apply()
+    _PROPERTY_KEY_MAP: ClassVar[dict[DatetimeProperty, str]] = {
+        DatetimeProperty.YEAR: "year",
+        DatetimeProperty.MONTH: "month",
+        DatetimeProperty.DAY: "day",
+        DatetimeProperty.DAYOFWEEK: "dayofweek",
+        DatetimeProperty.DAYOFYEAR: "dayofyear",
+        DatetimeProperty.QUARTER: "quarter",
+        DatetimeProperty.WEEK: "week",
+        DatetimeProperty.HOUR: "hour",
+        DatetimeProperty.MINUTE: "minute",
+        DatetimeProperty.SECOND: "second",
+        DatetimeProperty.IS_MONTH_END: "is_month_end",
+        DatetimeProperty.IS_MONTH_START: "is_month_start",
+        DatetimeProperty.SIN_HOUR: "sin_hour",
+        DatetimeProperty.COS_HOUR: "cos_hour",
+        DatetimeProperty.SIN_DAYOFWEEK: "sin_dayofweek",
+        DatetimeProperty.COS_DAYOFWEEK: "cos_dayofweek",
+        DatetimeProperty.SIN_MONTH: "sin_month",
+        DatetimeProperty.COS_MONTH: "cos_month",
+    }
+
+    def produced_columns(self) -> set[str]:
+        """
+        Returns the set of output column names derived from the configured properties.
+
+        Mirrors the naming logic in ``apply()``: applies any ``output_columns``
+        rename overrides, then falls back to ``{prefix}{key}`` for each active
+        property.
+
+        Returns
+        -------
+        set of str
+            Predicted output column names before the recommendation is applied.
+        """
+        prefix = self.output_prefix if self.output_prefix else f"{self.column_name}_"
+        mapping = (self.output_columns or {}).copy()
+        result: set[str] = set()
+        for prop, key in self._PROPERTY_KEY_MAP.items():
+            if prop in self.properties:
+                final_name = mapping.get(key, f"{prefix}{key}")
+                result.add(final_name)
+        return result
+
 
 @dataclass
 class DatetimeDurationRecommendation(Recommendation):
@@ -2653,6 +2737,14 @@ class DatetimeDurationRecommendation(Recommendation):
         print(f"    Calculation: '{self.end_column}' - '{self.start_column}'")
         print(f"    Output Column: '{self.output_column}'")
         print(f"    Result Unit: {self.unit}")
+
+    def required_columns(self) -> set[str]:
+        """Returns the two datetime columns used for the duration calculation."""
+        return {self.column_name, self.start_column, self.end_column}
+
+    def produced_columns(self) -> set[str]:
+        """Returns the single output duration column."""
+        return {self.output_column} if self.output_column else set()
 
 
 @dataclass
@@ -2805,6 +2897,14 @@ class AggregationRecommendation(Recommendation):
             print(
                 f"    [!] Validation Warning: {self.validation_mismatch_count} mismatches detected"
             )
+
+    def required_columns(self) -> set[str]:
+        """Returns the output column and all aggregation source columns."""
+        return {self.column_name} | set(self.agg_columns or [])
+
+    def produced_columns(self) -> set[str]:
+        """Returns the output column if it will be created (not just validated)."""
+        return {self.output_column} if self.output_column else set()
 
 
 @dataclass
@@ -3607,6 +3707,93 @@ class RecommendationManager:
 
         return sorted(self._pipeline, key=sort_key)
 
+    def _get_staged_pipeline(
+        self, initial_columns: set[str]
+    ) -> list[list[Recommendation]]:
+        """
+        Groups enabled recommendations into ordered execution stages.
+
+        A recommendation is placed in the earliest stage where all its required
+        columns are available—either present in the initial DataFrame or produced
+        by a recommendation in a preceding stage. Recommendations with an
+        ``explicit_stage`` override are deferred until at least that stage number
+        is reached, even if their dependencies are satisfied earlier.
+
+        Parameters
+        ----------
+        initial_columns : set of str
+            The column names present in the DataFrame before any recommendations
+            are applied.
+
+        Returns
+        -------
+        list of list of Recommendation
+            An ordered list of stages, where each stage is a list of
+            recommendations that can be safely executed in sequence.
+
+        Raises
+        ------
+        ValueError
+            If any recommendation's required columns can never be satisfied,
+            indicating an unsolvable dependency or a missing source column.
+
+        Notes
+        -----
+        Within each stage, recommendations are ordered by ``EXECUTION_PRIORITY``
+        (then alphabetically by column name), preserving the existing priority
+        semantics inside each stage.
+        """
+        enabled_recs = [r for r in self._get_sorted_pipeline() if r.enabled]
+        available: set[str] = set(initial_columns)
+        stages: list[list[Recommendation]] = []
+        remaining = list(enabled_recs)
+
+        while remaining:
+            stage_number = len(stages) + 1
+
+            current_stage = [
+                r
+                for r in remaining
+                if r.required_columns().issubset(available)
+                and (r.explicit_stage is None or r.explicit_stage <= stage_number)
+            ]
+
+            if not current_stage:
+                # Check whether any remaining rec has its deps met but is held
+                # back by explicit_stage — if so, we just advance the stage counter.
+                deferred = [
+                    r
+                    for r in remaining
+                    if r.required_columns().issubset(available)
+                    and r.explicit_stage is not None
+                    and r.explicit_stage > stage_number
+                ]
+                if deferred:
+                    # Advance past an empty stage so explicit_stage constraints
+                    # can be honoured.
+                    stages.append([])
+                else:
+                    # True deadlock: missing columns that no stage will ever produce.
+                    details = "; ".join(
+                        f"{r.id} ({r.column_name}) needs "
+                        f"{r.required_columns() - available}"
+                        for r in remaining
+                        if not r.required_columns().issubset(available)
+                    )
+                    raise ValueError(
+                        f"Unsatisfiable Pipeline: The following recommendations "
+                        f"require columns that are not in the DataFrame and are "
+                        f"not produced by any earlier recommendation: {details}"
+                    )
+            else:
+                stages.append(current_stage)
+                for r in current_stage:
+                    available.update(r.produced_columns())
+                    remaining.remove(r)
+
+        # Remove placeholder empty stages introduced for explicit_stage deferral
+        return [s for s in stages if s]
+
     def apply(
         self,
         df: pd.DataFrame,
@@ -3663,48 +3850,50 @@ class RecommendationManager:
         # Track columns slated for removal (e.g., raw strings after conversion)
         garbage_collector: set[str] = set()
 
-        # 3. Execution: Priority-ordered application
-        for rec in self._get_sorted_pipeline():
-            if not rec.enabled:
-                continue
+        # 3. Execution: Stage-ordered application
+        # Stages are derived from column dependencies so that recommendations
+        # which produce new columns always run before recommendations that
+        # consume those columns.
+        for stage in self._get_staged_pipeline(set(result.columns)):
+            for rec in stage:
+                try:
+                    # Capture state for overwrite validation
+                    out_cols = rec.produced_columns()
+                    pre_apply_dtypes: dict[str, Any] = {
+                        col: result[col].dtype
+                        for col in out_cols
+                        if col in result.columns
+                    }
 
-            try:
-                # Capture state for overwrite validation
-                out_col = getattr(rec, "output_column", None)
-                pre_apply_dtype = (
-                    result[out_col].dtype
-                    if (out_col and out_col in result.columns)
-                    else None
+                    # Perform the transformation
+                    result = rec.apply(result)
+
+                    # Dtype Safety Check: Prevent unexpected type changes on overwrites
+                    if allow_column_overwrite and pre_apply_dtypes:
+                        for col, pre_dtype in pre_apply_dtypes.items():
+                            if col in result.columns:
+                                current_dtype = result[col].dtype
+                                if current_dtype != pre_dtype:
+                                    raise TypeError(
+                                        f"Incompatible Overwrite: {rec.id} changed "
+                                        f"'{col}' from {pre_dtype} to {current_dtype}."
+                                    )
+
+                except Exception as e:
+                    # Wrap internal errors with manager-level context
+                    raise RuntimeError(
+                        f"Pipeline Failure: {rec.id} ({rec.rec_type.name}) failed on "
+                        f"column '{rec.column_name}'. Error: {e}"
+                    ) from e
+
+                # 4. Cleanup Registration: Flag source columns that are now redundant
+                is_transformative = rec.rec_type in (
+                    RecommendationType.DATETIME_CONVERSION,
+                    RecommendationType.FEATURE_EXTRACTION,
+                    RecommendationType.ENCODING,
                 )
-
-                # Perform the transformation
-                result = rec.apply(result)
-
-                # Dtype Safety Check: Prevent 'Object' columns from becoming 'Int'
-                # via overwrite unexpectedly
-                if pre_apply_dtype is not None and allow_column_overwrite and out_col:
-                    current_dtype = result[out_col].dtype
-                    if current_dtype != pre_apply_dtype:
-                        raise TypeError(
-                            f"Incompatible Overwrite: {rec.id} changed '{out_col}' "
-                            f"from {pre_apply_dtype} to {current_dtype}."
-                        )
-
-            except Exception as e:
-                # Wrap internal errors with manager-level context
-                raise RuntimeError(
-                    f"Pipeline Failure: {rec.id} ({rec.rec_type.name}) failed on "
-                    f"column '{rec.column_name}'. Error: {e}"
-                ) from e
-
-            # 4. Cleanup Registration: Flag source columns that are now redundant
-            is_transformative = rec.rec_type in (
-                RecommendationType.DATETIME_CONVERSION,
-                RecommendationType.FEATURE_EXTRACTION,
-                RecommendationType.ENCODING,
-            )
-            if is_transformative and rec.column_name in result.columns:
-                garbage_collector.add(rec.column_name)
+                if is_transformative and rec.column_name in result.columns:
+                    garbage_collector.add(rec.column_name)
 
         # 5. Final Cleanup: Drop source columns if they weren't overwritten
         if garbage_collector:
@@ -3795,9 +3984,9 @@ class RecommendationManager:
         """
         Validates the execution integrity and dependency graph of the current pipeline.
 
-        Performs a dry-run of the pipeline logic to ensure that all source columns
-        exist, no required data is dropped prematurely, and column overwrites do
-        not create logical "stale data" conflicts for downstream transformations.
+        Builds the staged execution plan and performs a dry-run to ensure that no
+        required data is dropped prematurely and that column overwrites do not
+        create logical "stale data" conflicts for downstream transformations.
 
         Parameters
         ----------
@@ -3814,84 +4003,64 @@ class RecommendationManager:
         Raises
         ------
         ValueError
-            If a required source column is missing.
+            If a required source column is missing or can never be satisfied.
         ValueError
-            If a recommendation depends on a column dropped by a higher-priority task.
+            If a recommendation depends on a column dropped by an earlier stage.
         ValueError
             If an unauthorized or unsafe column overwrite is detected.
         """
-        enabled_recs = [r for r in self._pipeline if r.enabled]
-        available_columns = set(df.columns)
+        # Build stages — this implicitly validates that all column dependencies
+        # are satisfiable; raises ValueError for missing or cyclic dependencies.
+        staged = self._get_staged_pipeline(set(df.columns))
 
-        # 1. Verification of Initial Source Existence
-        for rec in enabled_recs:
-            if rec.column_name not in available_columns:
-                raise ValueError(
-                    f"Missing Source: Column '{rec.column_name}' referenced in {rec.id} "
-                    f"does not exist in the DataFrame."
-                )
-
-        # 2. Sequential Dependency & Overwrite Analysis
-        sorted_recs = self._get_sorted_pipeline()
+        available_columns: set[str] = set(df.columns)
         dropped_columns: set[str] = set()
 
-        for i, rec in enumerate(sorted_recs):
-            if not rec.enabled:
-                continue
+        for stage in staged:
+            stage_produced: set[str] = set()
 
-            # Resolve all input requirements for this recommendation
-            dependencies = {rec.column_name}
-            for attr in ("start_column", "end_column", "agg_columns"):
-                val = getattr(rec, attr, None)
-                if isinstance(val, str):
-                    dependencies.add(val)
-                elif isinstance(val, list):
-                    dependencies.update(val)
-
-            # Safety Check: Is the input actually available at this stage?
-            conflict = dependencies.intersection(dropped_columns)
-            if conflict:
-                raise ValueError(
-                    f"Logic Conflict: Recommendation {rec.id} depends on {conflict}, "
-                    f"which was dropped in an earlier priority stage."
-                )
-
-            # 3. Overwrite Safety Analysis
-            output_col = getattr(rec, "output_column", None)
-            if output_col and output_col in available_columns:
-                if not allow_column_overwrite:
+            for i, rec in enumerate(stage):
+                # Check that nothing required by this rec was dropped in a prior stage
+                conflict = rec.required_columns().intersection(dropped_columns)
+                if conflict:
                     raise ValueError(
-                        f"Overwrite Conflict: {rec.id} attempts to update existing "
-                        f"column '{output_col}'. Set allow_column_overwrite=True to permit."
+                        f"Logic Conflict: Recommendation {rec.id} depends on "
+                        f"{conflict}, which was dropped in an earlier stage."
                     )
 
-                # Lookahead Check: Ensure no later step expects the 'original' version of this column
-                for later_rec in sorted_recs[i + 1 :]:
-                    if not later_rec.enabled:
-                        continue
+                # Overwrite safety: any produced column that already exists is an overwrite
+                for out_col in rec.produced_columns():
+                    if out_col in available_columns:
+                        if not allow_column_overwrite:
+                            raise ValueError(
+                                f"Overwrite Conflict: {rec.id} attempts to update "
+                                f"existing column '{out_col}'. Set "
+                                f"allow_column_overwrite=True to permit."
+                            )
 
-                    later_deps = {later_rec.column_name}
-                    for attr in ("start_column", "end_column", "agg_columns"):
-                        l_val = getattr(later_rec, attr, None)
-                        if isinstance(l_val, str):
-                            later_deps.add(l_val)
-                        elif isinstance(l_val, list):
-                            later_deps.update(l_val)
+                        # Lookahead within the same stage: no later rec in this
+                        # stage should require the original value of out_col.
+                        for later_rec in stage[i + 1 :]:
+                            if out_col in later_rec.required_columns():
+                                raise ValueError(
+                                    f"Pipeline Break: Cannot overwrite '{out_col}' "
+                                    f"in {rec.id} because a later step "
+                                    f"({later_rec.id}) in the same stage requires "
+                                    f"the original data for that column."
+                                )
 
-                    if output_col in later_deps:
-                        raise ValueError(
-                            f"Pipeline Break: Cannot overwrite '{output_col}' in {rec.id} "
-                            f"because a later step ({later_rec.id}) requires the original "
-                            f"data for that column."
-                        )
+                # Track drops for subsequent stages
+                is_dropped = rec.rec_type == RecommendationType.NON_INFORMATIVE or (
+                    rec.rec_type == RecommendationType.MISSING_VALUES
+                    and getattr(rec, "strategy", None)
+                    == MissingValueStrategy.DROP_COLUMN
+                )
+                if is_dropped:
+                    dropped_columns.add(rec.column_name)
 
-            # 4. State Tracking: Update dropped columns for the next iteration
-            is_dropped = rec.rec_type == RecommendationType.NON_INFORMATIVE or (
-                rec.rec_type == RecommendationType.MISSING_VALUES
-                and getattr(rec, "strategy", None) == MissingValueStrategy.DROP_COLUMN
-            )
-            if is_dropped:
-                dropped_columns.add(rec.column_name)
+                stage_produced.update(rec.produced_columns())
+
+            available_columns.update(stage_produced)
 
     def _semantic_similarity(self, col1: str, col2: str) -> float:
         """

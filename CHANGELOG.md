@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Staged Pipeline Execution**: `RecommendationManager.apply()` now executes recommendations in automatically derived stages rather than a single pass. Recommendations that produce new columns (feature extraction, aggregation, interaction, datetime duration) are placed in earlier stages; recommendations that consume those columns are placed in later stages automatically—no manual ordering required.
+* **`explicit_stage` Field**: All `Recommendation` subclasses now accept an optional `explicit_stage: int | None` field (editable in YAML). Setting this forces a recommendation into at least that stage number, enabling manual ordering for cases where column-type sequencing matters within the same column (e.g., impute → cast to int → convert to category).
+* **`required_columns()` Method**: Base `Recommendation` class exposes `required_columns() -> set[str]`, returning all columns needed as input. Overridden by `FeatureInteractionRecommendation`, `DatetimeDurationRecommendation`, and `AggregationRecommendation` to include their secondary columns.
+* **`produced_columns()` Method**: Base `Recommendation` class exposes `produced_columns() -> set[str]`, returning all columns the recommendation will create. Implemented by `FeatureInteractionRecommendation` (`derived_name`), `FeatureExtractionRecommendation` (all configured output columns), `DatetimeDurationRecommendation` (`output_column`), and `AggregationRecommendation` (`output_column`).
+* **`_get_staged_pipeline()` Method**: New internal `RecommendationManager` method that builds the ordered list of stages from `initial_columns`, using `required_columns()` and `produced_columns()` to determine placement. Raises `ValueError` for unsatisfiable dependencies.
+
+### Changed
+
+* **`_validate_pipeline()` Redesign**: Validation is now stage-aware. The initial flat "all required columns must exist in df" check is replaced by staged dependency validation. Drop conflicts and overwrite conflicts are evaluated per-stage.
+* **`FeatureExtractionRecommendation` — `_PROPERTY_KEY_MAP`**: Added a `ClassVar` mapping from `DatetimeProperty` to feature key string. Used by `produced_columns()` to compute expected output column names from `properties` and `output_columns` configuration.
+* **Stable ID Computation**: `explicit_stage` is excluded from the stable ID payload so that changing the stage hint for an existing recommendation does not alter its tracked identity.
+
 * **Expanded ColumnHint Coverage**: Added `ColumnHint` support for integer conversion, float conversion, boolean conversion, binning, value replacement, encoding, feature interaction, outlier detection, and explicit missing-value handling.
 
 ### Changed
