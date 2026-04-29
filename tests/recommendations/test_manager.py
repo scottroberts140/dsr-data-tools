@@ -1,8 +1,24 @@
-from dsr_data_tools.enums import MissingValueStrategy, RecommendationType
+import pandas as pd
+from dsr_data_tools.enums import (
+    BitDepth,
+    EncodingStrategy,
+    InteractionType,
+    MissingValueStrategy,
+    OutlierStrategy,
+    RecommendationType,
+)
 from dsr_data_tools.recommendations import (
+    BinningRecommendation,
+    BooleanClassificationRecommendation,
+    ColumnHint,
+    EncodingRecommendation,
+    FeatureInteractionRecommendation,
+    FloatConversionRecommendation,
     IntegerConversionRecommendation,
     MissingValuesRecommendation,
+    OutlierDetectionRecommendation,
     RecommendationManager,
+    ValueReplacementRecommendation,
 )
 
 
@@ -135,3 +151,143 @@ def test_manager_load_from_yaml_parses_enum_fields(tmp_path):
     assert rec is not None
     assert rec.strategy == MissingValueStrategy.DROP_ROWS
     assert rec.id == "rec_custom_001"
+
+
+def test_manager_generates_integer_and_float_recommendations_from_hints():
+    df = pd.DataFrame({"count": [1.0, 2.0, 3.0], "ratio": [0.1, 0.2, 0.3]})
+
+    manager = RecommendationManager()
+    manager.generate_recommendations(
+        df,
+        hints={
+            "count": ColumnHint.integer(target_depth=BitDepth.INT64),
+            "ratio": ColumnHint.floating(target_depth=BitDepth.FLOAT32),
+        },
+        hints_only=True,
+    )
+
+    rec_count = next(rec for rec in manager._pipeline if rec.column_name == "count")
+    rec_ratio = next(rec for rec in manager._pipeline if rec.column_name == "ratio")
+
+    assert isinstance(rec_count, IntegerConversionRecommendation)
+    assert rec_count.target_depth == BitDepth.INT64
+    assert rec_count.is_locked is True
+
+    assert isinstance(rec_ratio, FloatConversionRecommendation)
+    assert rec_ratio.target_depth == BitDepth.FLOAT32
+    assert rec_ratio.is_locked is True
+
+
+def test_manager_generates_boolean_binning_and_replacement_from_hints():
+    df = pd.DataFrame(
+        {
+            "flag": ["Y", "N", "Y"],
+            "age": [10, 25, 40],
+            "score": ["10", "n/a", "25"],
+        }
+    )
+
+    manager = RecommendationManager()
+    manager.generate_recommendations(
+        df,
+        hints={
+            "flag": ColumnHint.boolean(values=["Y", "N"]),
+            "age": ColumnHint.binning(
+                bins=[0, 18, 65],
+                labels=["minor", "adult"],
+            ),
+            "score": ColumnHint.value_replacement(
+                values=["n/a"],
+                replacement_value="0",
+            ),
+        },
+        hints_only=True,
+    )
+
+    rec_flag = next(rec for rec in manager._pipeline if rec.column_name == "flag")
+    rec_age = next(rec for rec in manager._pipeline if rec.column_name == "age")
+    rec_score = next(rec for rec in manager._pipeline if rec.column_name == "score")
+
+    assert isinstance(rec_flag, BooleanClassificationRecommendation)
+    assert rec_flag.values == ["Y", "N"]
+    assert rec_flag.is_locked is True
+
+    assert isinstance(rec_age, BinningRecommendation)
+    assert rec_age.bins == [0, 18, 65]
+    assert rec_age.labels == ["minor", "adult"]
+    assert rec_age.is_locked is True
+
+    assert isinstance(rec_score, ValueReplacementRecommendation)
+    assert rec_score.non_numeric_values == ["n/a"]
+    assert rec_score.non_numeric_count == 1
+    assert rec_score.replacement_value == "0"
+    assert rec_score.is_locked is True
+
+
+def test_manager_generates_encoding_and_interaction_from_hints():
+    df = pd.DataFrame(
+        {
+            "category": ["a", "b", "a"],
+            "fare_amount": [10.0, 20.0, 30.0],
+            "trip_distance": [2.0, 4.0, 6.0],
+        }
+    )
+
+    manager = RecommendationManager()
+    manager.generate_recommendations(
+        df,
+        hints={
+            "category": ColumnHint.encoding(strategy=EncodingStrategy.LABEL),
+            "fare_amount": ColumnHint.feature_interaction(
+                interaction_column="trip_distance",
+                interaction_type=InteractionType.RESOURCE_DENSITY,
+                operation="/",
+                rationale="fare per mile",
+                derived_name="fare_per_mile",
+            ),
+        },
+        hints_only=True,
+    )
+
+    rec_category = next(
+        rec for rec in manager._pipeline if rec.column_name == "category"
+    )
+    rec_fare = next(
+        rec for rec in manager._pipeline if rec.column_name == "fare_amount"
+    )
+
+    assert isinstance(rec_category, EncodingRecommendation)
+    assert rec_category.encoder_type == EncodingStrategy.LABEL
+    assert rec_category.unique_values == 2
+    assert rec_category.is_locked is True
+
+    assert isinstance(rec_fare, FeatureInteractionRecommendation)
+    assert rec_fare.column_name_2 == "trip_distance"
+    assert rec_fare.interaction_type == InteractionType.RESOURCE_DENSITY
+    assert rec_fare.operation == "/"
+    assert rec_fare.rationale == "fare per mile"
+    assert rec_fare.derived_name == "fare_per_mile"
+    assert rec_fare.is_locked is True
+
+
+def test_manager_generates_outlier_detection_from_hints():
+    df = pd.DataFrame({"fare_amount": [10.0, 12.0, 500.0]})
+
+    manager = RecommendationManager()
+    manager.generate_recommendations(
+        df,
+        hints={
+            "fare_amount": ColumnHint.outlier_detection(
+                strategy=OutlierStrategy.ROBUST_SCALER
+            )
+        },
+        hints_only=True,
+    )
+
+    rec = next(rec for rec in manager._pipeline if rec.column_name == "fare_amount")
+
+    assert isinstance(rec, OutlierDetectionRecommendation)
+    assert rec.strategy == OutlierStrategy.ROBUST_SCALER
+    assert rec.max_value == 500.0
+    assert rec.mean_value == df["fare_amount"].mean()
+    assert rec.is_locked is True

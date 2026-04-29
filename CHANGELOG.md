@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **Expanded ColumnHint Coverage**: Added `ColumnHint` support for integer conversion, float conversion, boolean conversion, binning, value replacement, encoding, feature interaction, outlier detection, and explicit missing-value handling.
+
 ### Changed
+
+* **Hint-to-Recommendation Translation**: Extended `RecommendationManager._apply_column_hint()` so the new `ColumnHintType` values generate locked recommendation objects with the metadata needed for downstream execution.
+* **ColumnHint Documentation**: Expanded README guidance to clarify which recommendation types are representable as `ColumnHint` values and explicitly documented that `ClassImbalanceRecommendation` remains advisory-only.
 
 * **Bucketing Message Formatting**: Normalized `_apply_bucketing` status message formatting to a single stable line for clearer logging output and snapshot diff readability.
 

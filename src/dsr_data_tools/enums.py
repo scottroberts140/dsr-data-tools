@@ -213,6 +213,22 @@ class ColumnHintType(Enum):
         Latitude/longitude columns; apply bounding box constraints.
     DISTANCE : str
         Distance-based column; specify unit and optional bounds.
+    INTEGER : str
+        Force integer dtype conversion.
+    FLOAT : str
+        Force floating-point dtype conversion.
+    BOOLEAN : str
+        Force conversion of a binary-value column to boolean dtype.
+    BINNING : str
+        Bin a numeric column into labeled ranges.
+    VALUE_REPLACEMENT : str
+        Replace placeholder string values before downstream casting.
+    ENCODING : str
+        Force a specific categorical encoding strategy.
+    FEATURE_INTERACTION : str
+        Engineer an interaction feature using this column and another column.
+    OUTLIER_DETECTION : str
+        Apply an outlier mitigation strategy such as scaling or removal.
     """
 
     DATETIME = "datetime"
@@ -222,6 +238,14 @@ class ColumnHintType(Enum):
     AGGREGATE = "aggregate"
     GEOSPATIAL = "geospatial"
     DISTANCE = "distance"
+    INTEGER = "integer"
+    FLOAT = "float"
+    BOOLEAN = "boolean"
+    BINNING = "binning"
+    VALUE_REPLACEMENT = "value_replacement"
+    ENCODING = "encoding"
+    FEATURE_INTERACTION = "feature_interaction"
+    OUTLIER_DETECTION = "outlier_detection"
 
 
 class RoundingMode(Enum):

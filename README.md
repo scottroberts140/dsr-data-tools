@@ -132,6 +132,10 @@ editable_fields = [
 
 Users can provide a ColumnHint to specify the 'logical type' of a column and set constraints like rounding, bounds, or specific feature extraction needs.
 
+Supported `ColumnHint` coverage includes dataset-transforming and feature-engineering recommendation types such as datetime extraction, aggregation, categorical/encoding guidance, numeric and dtype conversions, binning, value replacement, outlier detection, boolean conversion, geospatial and distance handling, plus explicit drop/ignore behavior.
+
+`ClassImbalanceRecommendation` is intentionally not represented as a `ColumnHint`. It is an advisory, training-time recommendation about the target distribution, and its `apply()` method does not mutate the dataset.
+
 ```python
 import pandas as pd
 from dsr_data_tools.analysis import RecommendationManager

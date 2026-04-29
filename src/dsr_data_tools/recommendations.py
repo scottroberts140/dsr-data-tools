@@ -2848,10 +2848,42 @@ class ColumnHint:
         Valid longitude range for geospatial data.
     unit : str, optional
         Measurement unit for distance-based data.
+    target_depth : BitDepth, optional
+        The target dtype bit-depth for explicit integer or float conversions.
+    boolean_values : list of Any, optional
+        The two values to map to False/True for explicit boolean conversion.
+    binning_bins : list of float, optional
+        Explicit bin edges for discretization.
+    binning_labels : list of str, optional
+        Labels corresponding to ``binning_bins``.
+    replacement_values : list of str, optional
+        Placeholder values to replace before downstream processing.
+    replacement_value : float or str, optional
+        The value to substitute for entries in ``replacement_values``.
+    encoding_strategy : EncodingStrategy, optional
+        The categorical encoding strategy to apply.
+    interaction_column : str, optional
+        Secondary column for an explicit feature interaction.
+    interaction_type : InteractionType, optional
+        Domain-specific type label for the engineered interaction.
+    interaction_operation : str, optional
+        Mathematical operator for the interaction, typically ``*`` or ``/``.
+    interaction_rationale : str, optional
+        Human-readable explanation of why the interaction is useful.
+    interaction_derived_name : str, optional
+        Output column name for the derived interaction feature.
+    outlier_strategy : OutlierStrategy, optional
+        Strategy for mitigating outliers through scaling or row removal.
     is_ignored : bool, default False
         If True, the column is completely bypassed by the engine.
     should_drop : bool, default False
         If True, forces a recommendation to drop the column.
+    missing_value_strategy : MissingValueStrategy, optional
+        The strategy to use when handling missing values. Composable with
+        ``logical_type`` hints.
+    missing_fill_value : str, int, float, or None, optional
+        The fill value to use when ``missing_value_strategy`` is
+        ``MissingValueStrategy.FILL_VALUE``.
 
     Notes
     -----
@@ -2874,8 +2906,23 @@ class ColumnHint:
     lat_bounds: tuple[float, float] | None = None
     lon_bounds: tuple[float, float] | None = None
     unit: str | None = None
+    target_depth: BitDepth | None = None
+    boolean_values: list[Any] | None = None
+    binning_bins: list[float] | None = None
+    binning_labels: list[str] | None = None
+    replacement_values: list[str] | None = None
+    replacement_value: float | str | None = None
+    encoding_strategy: EncodingStrategy | None = None
+    interaction_column: str | None = None
+    interaction_type: InteractionType | None = None
+    interaction_operation: str | None = None
+    interaction_rationale: str | None = None
+    interaction_derived_name: str | None = None
+    outlier_strategy: OutlierStrategy | None = None
     is_ignored: bool = False
     should_drop: bool = False
+    missing_value_strategy: MissingValueStrategy | None = None
+    missing_fill_value: str | int | float | None = None
 
     @classmethod
     def datetime(
@@ -3068,6 +3115,252 @@ class ColumnHint:
             rounding_mode=rounding_mode,
             scale_factor=scale_factor,
         )
+
+    @classmethod
+    def integer(
+        cls,
+        target_depth: BitDepth = BitDepth.INT32,
+    ) -> "ColumnHint":
+        """
+        Hint that a column should be cast to an integer dtype.
+
+        Parameters
+        ----------
+        target_depth : BitDepth, default BitDepth.INT32
+            The target integer bit-depth.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for integer conversion.
+        """
+        if target_depth not in (BitDepth.INT32, BitDepth.INT64):
+            raise ValueError("integer hints require BitDepth.INT32 or BitDepth.INT64")
+
+        return cls(logical_type=ColumnHintType.INTEGER, target_depth=target_depth)
+
+    @classmethod
+    def floating(
+        cls,
+        target_depth: BitDepth = BitDepth.FLOAT32,
+    ) -> "ColumnHint":
+        """
+        Hint that a column should be cast to a float dtype.
+
+        Parameters
+        ----------
+        target_depth : BitDepth, default BitDepth.FLOAT32
+            The target floating-point bit-depth.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for float conversion.
+        """
+        if target_depth not in (BitDepth.FLOAT32, BitDepth.FLOAT64):
+            raise ValueError(
+                "floating hints require BitDepth.FLOAT32 or BitDepth.FLOAT64"
+            )
+
+        return cls(logical_type=ColumnHintType.FLOAT, target_depth=target_depth)
+
+    @classmethod
+    def boolean(
+        cls,
+        values: list[Any],
+    ) -> "ColumnHint":
+        """
+        Hint that a binary-value column should be converted to boolean.
+
+        Parameters
+        ----------
+        values : list[Any]
+            The two distinct values present in the column.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for boolean conversion.
+        """
+        if len(values) != 2:
+            raise ValueError("boolean hints require exactly two values")
+
+        return cls(logical_type=ColumnHintType.BOOLEAN, boolean_values=list(values))
+
+    @classmethod
+    def binning(
+        cls,
+        bins: list[float],
+        labels: list[str],
+    ) -> "ColumnHint":
+        """
+        Hint that a numeric column should be discretized into bins.
+
+        Parameters
+        ----------
+        bins : list[float]
+            Bin edges used by ``pd.cut``.
+        labels : list[str]
+            Labels for the resulting bins.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for binning.
+        """
+        if len(bins) < 2:
+            raise ValueError("binning hints require at least two bin edges")
+        if len(labels) != len(bins) - 1:
+            raise ValueError("binning hints require exactly len(bins) - 1 labels")
+
+        return cls(
+            logical_type=ColumnHintType.BINNING,
+            binning_bins=list(bins),
+            binning_labels=list(labels),
+        )
+
+    @classmethod
+    def value_replacement(
+        cls,
+        values: list[str],
+        replacement_value: float | str,
+    ) -> "ColumnHint":
+        """
+        Hint that placeholder values should be replaced before later processing.
+
+        Parameters
+        ----------
+        values : list[str]
+            Placeholder values to replace.
+        replacement_value : float or str
+            Replacement to apply to all matched values.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for placeholder replacement.
+        """
+        if not values:
+            raise ValueError("value replacement hints require at least one value")
+
+        return cls(
+            logical_type=ColumnHintType.VALUE_REPLACEMENT,
+            replacement_values=list(values),
+            replacement_value=replacement_value,
+        )
+
+    @classmethod
+    def encoding(
+        cls,
+        strategy: EncodingStrategy = EncodingStrategy.ONEHOT,
+    ) -> "ColumnHint":
+        """
+        Hint that a column should use a specific encoding strategy.
+
+        Parameters
+        ----------
+        strategy : EncodingStrategy, default EncodingStrategy.ONEHOT
+            The encoding strategy to apply.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for encoding.
+        """
+        return cls(
+            logical_type=ColumnHintType.ENCODING,
+            encoding_strategy=strategy,
+        )
+
+    @classmethod
+    def feature_interaction(
+        cls,
+        interaction_column: str,
+        interaction_type: InteractionType = InteractionType.STATUS_IMPACT,
+        operation: str = "*",
+        rationale: str = "",
+        derived_name: str | None = None,
+    ) -> "ColumnHint":
+        """
+        Hint that a feature interaction should be engineered with another column.
+
+        Parameters
+        ----------
+        interaction_column : str
+            The second column participating in the interaction.
+        interaction_type : InteractionType, default InteractionType.STATUS_IMPACT
+            Domain-specific type label for the interaction.
+        operation : str, default "*"
+            Mathematical operator to apply. Supported values are ``*`` and ``/``.
+        rationale : str, default ""
+            Human-readable justification for the interaction.
+        derived_name : str | None, default None
+            Optional explicit output column name.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for feature interaction.
+        """
+        if operation not in {"*", "/"}:
+            raise ValueError("feature interaction hints require '*' or '/' operation")
+        if not interaction_column.strip():
+            raise ValueError("feature interaction hints require interaction_column")
+
+        return cls(
+            logical_type=ColumnHintType.FEATURE_INTERACTION,
+            interaction_column=interaction_column,
+            interaction_type=interaction_type,
+            interaction_operation=operation,
+            interaction_rationale=rationale,
+            interaction_derived_name=derived_name,
+        )
+
+    @classmethod
+    def outlier_detection(
+        cls,
+        strategy: OutlierStrategy = OutlierStrategy.SCALING,
+    ) -> "ColumnHint":
+        """
+        Hint that a column should apply an outlier detection strategy.
+
+        Parameters
+        ----------
+        strategy : OutlierStrategy, default OutlierStrategy.SCALING
+            Outlier mitigation strategy to apply.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for outlier detection.
+        """
+        return cls(
+            logical_type=ColumnHintType.OUTLIER_DETECTION,
+            outlier_strategy=strategy,
+        )
+
+    @classmethod
+    def missing_values(
+        cls,
+        strategy: MissingValueStrategy,
+        fill_value: str | int | float | None = None,
+    ) -> "ColumnHint":
+        """
+        Hint that specifies how to handle missing values in a column.
+
+        Parameters
+        ----------
+        strategy : MissingValueStrategy
+            The imputation or removal strategy to apply.
+        fill_value : str, int, float, or None, optional
+            The value to fill with when using ``MissingValueStrategy.FILL_VALUE``.
+
+        Returns
+        -------
+        ColumnHint
+            A hint configured for missing value handling.
+        """
+        return cls(missing_value_strategy=strategy, missing_fill_value=fill_value)
 
     @classmethod
     def ignore(cls) -> "ColumnHint":
@@ -4013,7 +4306,184 @@ class RecommendationManager:
             self._pipeline.append(rec_drop)
             return
 
-        # 3. Datetime Logic
+        # 3. Missing Value Strategy (composable with logical_type hints)
+        if hint.missing_value_strategy is not None:
+            null_count = int(series.isna().sum())
+            null_ratio = null_count / len(series) if len(series) > 0 else 0.0
+            rec_mv = MissingValuesRecommendation(
+                column_name=col_name,
+                description=(
+                    f"Handle missing values in '{col_name}' using "
+                    f"{hint.missing_value_strategy.name} strategy{user_note}"
+                ),
+                missing_count=null_count,
+                missing_percentage=null_ratio * 100,
+                strategy=hint.missing_value_strategy,
+                fill_value=hint.missing_fill_value,
+            )
+            rec_mv.is_locked = True
+            self._pipeline.append(rec_mv)
+
+        # 4. Explicit Integer Conversion
+        if hint.logical_type == ColumnHintType.INTEGER:
+            target_depth = hint.target_depth or BitDepth.INT32
+            if target_depth not in (BitDepth.INT32, BitDepth.INT64):
+                raise ValueError(
+                    "Integer ColumnHint target_depth must be BitDepth.INT32 or BitDepth.INT64."
+                )
+
+            integer_count = (
+                int(((series.dropna() % 1) == 0).sum())
+                if pd.api.types.is_numeric_dtype(series)
+                else 0
+            )
+            rec_int = IntegerConversionRecommendation(
+                column_name=col_name,
+                description=f"Convert '{col_name}' to {target_depth.name}{user_note}",
+                target_depth=target_depth,
+                integer_count=integer_count,
+            )
+            rec_int.is_locked = True
+            self._pipeline.append(rec_int)
+            return
+
+        # 5. Explicit Float Conversion
+        if hint.logical_type == ColumnHintType.FLOAT:
+            target_depth = hint.target_depth or BitDepth.FLOAT32
+            if target_depth not in (BitDepth.FLOAT32, BitDepth.FLOAT64):
+                raise ValueError(
+                    "Float ColumnHint target_depth must be BitDepth.FLOAT32 or BitDepth.FLOAT64."
+                )
+
+            rec_float = FloatConversionRecommendation(
+                column_name=col_name,
+                description=f"Convert '{col_name}' to {target_depth.name}{user_note}",
+                target_depth=target_depth,
+            )
+            rec_float.is_locked = True
+            self._pipeline.append(rec_float)
+            return
+
+        # 6. Explicit Boolean Conversion
+        if hint.logical_type == ColumnHintType.BOOLEAN:
+            if not hint.boolean_values or len(hint.boolean_values) != 2:
+                raise ValueError(
+                    "Boolean ColumnHint requires exactly two boolean_values."
+                )
+
+            rec_bool = BooleanClassificationRecommendation(
+                column_name=col_name,
+                description=f"Convert '{col_name}' to boolean{user_note}",
+                values=list(hint.boolean_values),
+            )
+            rec_bool.is_locked = True
+            self._pipeline.append(rec_bool)
+            return
+
+        # 7. Explicit Binning
+        if hint.logical_type == ColumnHintType.BINNING:
+            if not hint.binning_bins or not hint.binning_labels:
+                raise ValueError(
+                    "Binning ColumnHint requires binning_bins and binning_labels."
+                )
+            if len(hint.binning_labels) != len(hint.binning_bins) - 1:
+                raise ValueError(
+                    "Binning ColumnHint requires exactly len(binning_bins) - 1 labels."
+                )
+
+            rec_bin = BinningRecommendation(
+                column_name=col_name,
+                description=f"Bin '{col_name}' into labeled ranges{user_note}",
+                bins=list(hint.binning_bins),
+                labels=list(hint.binning_labels),
+            )
+            rec_bin.is_locked = True
+            self._pipeline.append(rec_bin)
+            return
+
+        # 8. Explicit Value Replacement
+        if hint.logical_type == ColumnHintType.VALUE_REPLACEMENT:
+            if not hint.replacement_values:
+                raise ValueError(
+                    "ValueReplacement ColumnHint requires replacement_values."
+                )
+
+            non_numeric_count = int(series.isin(hint.replacement_values).sum())
+            rec_replace = ValueReplacementRecommendation(
+                column_name=col_name,
+                description=(f"Replace placeholder values in '{col_name}'{user_note}"),
+                non_numeric_values=list(hint.replacement_values),
+                non_numeric_count=non_numeric_count,
+                replacement_value=(
+                    hint.replacement_value
+                    if hint.replacement_value is not None
+                    else np.nan
+                ),
+            )
+            rec_replace.is_locked = True
+            self._pipeline.append(rec_replace)
+            return
+
+        # 9. Explicit Encoding
+        if hint.logical_type == ColumnHintType.ENCODING:
+            strategy = hint.encoding_strategy or EncodingStrategy.ONEHOT
+            rec_encoding = EncodingRecommendation(
+                column_name=col_name,
+                description=(f"Encode '{col_name}' using {strategy.name}{user_note}"),
+                encoder_type=strategy,
+                unique_values=int(series.nunique(dropna=True)),
+            )
+            rec_encoding.is_locked = True
+            self._pipeline.append(rec_encoding)
+            return
+
+        # 10. Explicit Feature Interaction
+        if hint.logical_type == ColumnHintType.FEATURE_INTERACTION:
+            if not hint.interaction_column:
+                raise ValueError(
+                    "FeatureInteraction ColumnHint requires interaction_column."
+                )
+            operation = hint.interaction_operation or "*"
+            if operation not in {"*", "/"}:
+                raise ValueError(
+                    "FeatureInteraction ColumnHint operation must be '*' or '/'."
+                )
+
+            rec_interaction = FeatureInteractionRecommendation(
+                column_name=col_name,
+                column_name_2=hint.interaction_column,
+                description=(
+                    f"Engineer interaction '{col_name}' {operation} "
+                    f"'{hint.interaction_column}'{user_note}"
+                ),
+                interaction_type=(
+                    hint.interaction_type or InteractionType.STATUS_IMPACT
+                ),
+                operation=operation,
+                rationale=hint.interaction_rationale or "",
+                derived_name=hint.interaction_derived_name or "",
+            )
+            rec_interaction.is_locked = True
+            self._pipeline.append(rec_interaction)
+            return
+
+        # 11. Explicit Outlier Detection
+        if hint.logical_type == ColumnHintType.OUTLIER_DETECTION:
+            strategy = hint.outlier_strategy or OutlierStrategy.SCALING
+            rec_outlier = OutlierDetectionRecommendation(
+                column_name=col_name,
+                description=(
+                    f"Mitigate outliers in '{col_name}' using {strategy.name}{user_note}"
+                ),
+                strategy=strategy,
+                max_value=float(series.max()) if len(series.dropna()) > 0 else 0.0,
+                mean_value=float(series.mean()) if len(series.dropna()) > 0 else 0.0,
+            )
+            rec_outlier.is_locked = True
+            self._pipeline.append(rec_outlier)
+            return
+
+        # 12. Datetime Logic
         if hint.logical_type == ColumnHintType.DATETIME:
             if not pd.api.types.is_datetime64_any_dtype(series):
                 fmt_desc = (
@@ -4044,7 +4514,7 @@ class RecommendationManager:
             self._pipeline.append(extraction_rec)
             return
 
-        # 4. Distance Logic
+        # 13. Distance Logic
         elif hint.logical_type == ColumnHintType.DISTANCE:
             lower_bound = float(hint.floor) if hint.floor is not None else 0.0
             upper_bound = float(hint.ceiling) if hint.ceiling is not None else 500.0
@@ -4060,7 +4530,7 @@ class RecommendationManager:
             self._pipeline.append(rec_distance)
             return
 
-        # 5. Geospatial Logic
+        # 14. Geospatial Logic
         elif hint.logical_type == ColumnHintType.GEOSPATIAL:
             if hint.lat_bounds is not None:
                 lat_lower, lat_upper = hint.lat_bounds
@@ -4087,7 +4557,7 @@ class RecommendationManager:
                 self._pipeline.append(rec_lon)
             return
 
-        # 6. Aggregation Logic
+        # 15. Aggregation Logic
         elif (
             hint.logical_type == ColumnHintType.AGGREGATE
             and hint.agg_columns
@@ -4117,7 +4587,7 @@ class RecommendationManager:
             self._pipeline.append(rec_agg)
             return
 
-        # 7. Numeric & Financial Logic
+        # 16. Numeric & Financial Logic
         elif hint.logical_type in (ColumnHintType.NUMERIC, ColumnHintType.FINANCIAL):
             if hint.floor is not None or hint.ceiling is not None:
                 lower = (
@@ -4177,7 +4647,7 @@ class RecommendationManager:
                 self._pipeline.append(rec_dec)
             return
 
-        # 8. Categorical Logic
+        # 17. Categorical Logic
         elif hint.logical_type == ColumnHintType.CATEGORICAL:
             rec_cat = CategoricalConversionRecommendation(
                 column_name=col_name,
