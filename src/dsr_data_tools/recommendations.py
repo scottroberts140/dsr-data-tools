@@ -5788,6 +5788,12 @@ class RecommendationManager:
             return None
         return int(match.group(1))
 
+    @staticmethod
+    def _is_new_recommendation_id(rec_id: str) -> bool:
+        """Return True when a YAML key is a placeholder for a new recommendation."""
+        normalized = rec_id.strip().lower()
+        return normalized == "__new__" or normalized.startswith("new_rec_")
+
     @classmethod
     def load_from_yaml(cls, filepath: PathLike) -> "RecommendationManager":
         """
@@ -5812,15 +5818,26 @@ class RecommendationManager:
 
         # Staged-only YAML layout:
         # stage_N/step_N -> {rec_id -> recommendation payload}
+        # Optional unassigned bucket (default stage by rec_type):
+        # unassigned -> {rec_id -> recommendation payload}
         flattened_entries: list[tuple[str, dict[str, Any], int | None]] = []
         for top_key, top_value in payload.items():
+            if isinstance(top_key, str) and top_key.strip().lower() == "unassigned":
+                if not isinstance(top_value, dict):
+                    raise ValueError(
+                        "'unassigned' must map to a dictionary of recommendations"
+                    )
+                for rec_id, rec_data in top_value.items():
+                    flattened_entries.append((rec_id, rec_data, None))
+                continue
+
             stage_number = (
                 cls._parse_stage_key(top_key) if isinstance(top_key, str) else None
             )
             if stage_number is None:
                 raise ValueError(
                     "recommendations.yaml must use stage keys only (e.g., "
-                    "'stage_1', 'stage_2')."
+                    "'stage_1', 'stage_2') and may optionally include 'unassigned'."
                 )
             if not isinstance(top_value, dict):
                 raise ValueError(
@@ -5836,9 +5853,10 @@ class RecommendationManager:
         for rec_id, rec_data, stage_number in flattened_entries:
             if not isinstance(rec_id, str):
                 raise ValueError("Recommendation IDs must be strings")
-            if rec_id in seen_ids:
-                raise ValueError(f"Duplicate recommendation ID found: {rec_id}")
-            seen_ids.add(rec_id)
+            if not cls._is_new_recommendation_id(rec_id):
+                if rec_id in seen_ids:
+                    raise ValueError(f"Duplicate recommendation ID found: {rec_id}")
+                seen_ids.add(rec_id)
 
             if not isinstance(rec_data, dict):
                 raise ValueError(f"Recommendation '{rec_id}' must map to a dictionary")
@@ -5871,6 +5889,11 @@ class RecommendationManager:
                 class_map=class_map,
             )
 
+            # When stage is omitted (unassigned bucket), pick the recommendation's
+            # default stage from execution priority unless explicit_stage is set.
+            if stage_number is None and normalized.get("explicit_stage") is None:
+                normalized["explicit_stage"] = cls.EXECUTION_PRIORITY.get(rec_type, 999)
+
             init_kwargs: dict[str, Any] = {}
             for field_def in fields(rec_cls):
                 if not field_def.init:
@@ -5882,7 +5905,15 @@ class RecommendationManager:
                     )
 
             recommendation = rec_cls(**init_kwargs)
-            object.__setattr__(recommendation, "id", rec_id)
+
+            resolved_id = rec_id
+            if cls._is_new_recommendation_id(rec_id):
+                resolved_id = _generate_recommendation_id()
+                while resolved_id in seen_ids:
+                    resolved_id = _generate_recommendation_id()
+                seen_ids.add(resolved_id)
+
+            object.__setattr__(recommendation, "id", resolved_id)
             object.__setattr__(recommendation, "_locked", True)
             recommendations.append(recommendation)
 

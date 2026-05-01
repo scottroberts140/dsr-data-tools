@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * **Staged Pipeline Execution**: `RecommendationManager.apply()` now executes recommendations in automatically derived stages rather than a single pass. Recommendations that produce new columns (feature extraction, aggregation, interaction, datetime duration) are placed in earlier stages; recommendations that consume those columns are placed in later stages automatically—no manual ordering required.
+* **New Recommendation Placeholders**: `RecommendationManager.load_from_yaml()` now treats keys like `new_rec_*` and `__new__` as placeholders for user-authored recommendations and generates a fresh `rec_*` ID automatically.
+* **Unassigned Recommendation Bucket**: `recommendations.yaml` now supports an optional top-level `unassigned` block for recommendations without an explicit stage. These recommendations are assigned to the default stage for their `rec_type` via `EXECUTION_PRIORITY`.
 * **`explicit_stage` Field**: All `Recommendation` subclasses now accept an optional `explicit_stage: int | None` field (editable in YAML). Setting this forces a recommendation into at least that stage number, enabling manual ordering for cases where column-type sequencing matters within the same column (e.g., impute → cast to int → convert to category).
 * **`required_columns()` Method**: Base `Recommendation` class exposes `required_columns() -> set[str]`, returning all columns needed as input. Overridden by `FeatureInteractionRecommendation`, `DatetimeDurationRecommendation`, and `AggregationRecommendation` to include their secondary columns.
 * **`produced_columns()` Method**: Base `Recommendation` class exposes `produced_columns() -> set[str]`, returning all columns the recommendation will create. Implemented by `FeatureInteractionRecommendation` (`derived_name`), `FeatureExtractionRecommendation` (all configured output columns), `DatetimeDurationRecommendation` (`output_column`), and `AggregationRecommendation` (`output_column`).
@@ -18,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 * **`_validate_pipeline()` Redesign**: Validation is now stage-aware. The initial flat "all required columns must exist in df" check is replaced by staged dependency validation. Drop conflicts and overwrite conflicts are evaluated per-stage.
+* **Stage-Only YAML Contract**: Flat ID-keyed recommendation YAML loading has been removed. `load_from_yaml()` now requires stage-grouped YAML (`stage_N` / `step_N`) with optional `unassigned`.
 * **`FeatureExtractionRecommendation` — `_PROPERTY_KEY_MAP`**: Added a `ClassVar` mapping from `DatetimeProperty` to feature key string. Used by `produced_columns()` to compute expected output column names from `properties` and `output_columns` configuration.
 * **Stable ID Computation**: `explicit_stage` is excluded from the stable ID payload so that changing the stage hint for an existing recommendation does not alter its tracked identity.
 

@@ -174,6 +174,51 @@ def test_manager_load_from_yaml_rejects_legacy_flat_format(tmp_path):
         RecommendationManager.load_from_yaml(filepath)
 
 
+def test_manager_load_from_yaml_generates_id_for_new_placeholder(tmp_path):
+    """Verifies placeholder IDs are replaced with generated recommendation IDs."""
+    yaml_text = (
+        "stage_4:\n"
+        "  new_rec_placeholder:\n"
+        "    column_name [RO]: workclass\n"
+        "    description [RO]: Handle missing values\n"
+        "    rec_type [RO]: MISSING_VALUES\n"
+        "    strategy: DROP_ROWS\n"
+        "    enabled: true\n"
+    )
+    filepath = tmp_path / "recommendations.yaml"
+    filepath.write_text(yaml_text)
+
+    loaded = RecommendationManager.load_from_yaml(filepath)
+    assert len(loaded._pipeline) == 1
+    rec = loaded._pipeline[0]
+
+    assert rec.id.startswith("rec_")
+    assert rec.id != "new_rec_placeholder"
+    assert rec.explicit_stage == 4
+
+
+def test_manager_load_from_yaml_unassigned_defaults_to_type_priority(tmp_path):
+    """Verifies unassigned recommendations default to type execution stage."""
+    yaml_text = (
+        "unassigned:\n"
+        "  new_rec_unassigned:\n"
+        "    column_name [RO]: workclass\n"
+        "    description [RO]: Handle missing values\n"
+        "    rec_type [RO]: MISSING_VALUES\n"
+        "    strategy: DROP_ROWS\n"
+        "    enabled: true\n"
+    )
+    filepath = tmp_path / "recommendations.yaml"
+    filepath.write_text(yaml_text)
+
+    loaded = RecommendationManager.load_from_yaml(filepath)
+    assert len(loaded._pipeline) == 1
+    rec = loaded._pipeline[0]
+
+    assert isinstance(rec, MissingValuesRecommendation)
+    assert rec.explicit_stage == RecommendationManager.EXECUTION_PRIORITY[rec.rec_type]
+
+
 def test_manager_load_from_staged_yaml_syncs_explicit_stage(tmp_path):
     """Verifies stage placement in YAML overrides stale explicit_stage values."""
     yaml_text = (
