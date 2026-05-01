@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import MISSING, asdict, dataclass, field, fields
@@ -5779,6 +5780,14 @@ class RecommendationManager:
 
         return value
 
+    @staticmethod
+    def _parse_stage_key(key: str) -> int | None:
+        """Parse top-level stage keys like ``stage_3`` or ``step_3``."""
+        match = re.fullmatch(r"(?:stage|step)_(\d+)", key.strip().lower())
+        if not match:
+            return None
+        return int(match.group(1))
+
     @classmethod
     def load_from_yaml(cls, filepath: PathLike) -> "RecommendationManager":
         """
@@ -5796,13 +5805,32 @@ class RecommendationManager:
         """
         payload, _ = load_yaml(filepath)
         if not isinstance(payload, dict):
-            raise ValueError("recommendations.yaml must contain a mapping of IDs")
+            raise ValueError(
+                "recommendations.yaml must contain either a mapping of IDs or "
+                "a mapping of stages to recommendation mappings"
+            )
+
+        # Supports two YAML layouts:
+        # 1) Legacy: rec_id -> recommendation payload
+        # 2) Staged: stage_N/step_N -> {rec_id -> recommendation payload}
+        flattened_entries: list[tuple[str, dict[str, Any], int | None]] = []
+        for top_key, top_value in payload.items():
+            stage_number = cls._parse_stage_key(top_key) if isinstance(top_key, str) else None
+            if stage_number is not None:
+                if not isinstance(top_value, dict):
+                    raise ValueError(
+                        f"Stage '{top_key}' must map to a dictionary of recommendations"
+                    )
+                for rec_id, rec_data in top_value.items():
+                    flattened_entries.append((rec_id, rec_data, stage_number))
+            else:
+                flattened_entries.append((top_key, top_value, None))
 
         class_map = cls._recommendation_class_map()
         recommendations: list[Recommendation] = []
         seen_ids: set[str] = set()
 
-        for rec_id, rec_data in payload.items():
+        for rec_id, rec_data, stage_number in flattened_entries:
             if not isinstance(rec_id, str):
                 raise ValueError("Recommendation IDs must be strings")
             if rec_id in seen_ids:
@@ -5818,6 +5846,10 @@ class RecommendationManager:
                     continue
                 clean_key = key[:-5] if key.endswith(" [RO]") else key
                 normalized[clean_key] = value
+
+            # Placement in the staged YAML is authoritative for explicit_stage.
+            if stage_number is not None:
+                normalized["explicit_stage"] = stage_number
 
             rec_type_raw = normalized.get("rec_type")
             if not isinstance(rec_type_raw, str):
@@ -5857,7 +5889,7 @@ class RecommendationManager:
         self, output_dir: PathLike, filename: str
     ) -> tuple[Path | CloudPath, dict[str, Any]]:
         """
-        Serializes the internal pipeline to a YAML file as a dictionary keyed by ID.
+        Serializes the internal pipeline to a stage-grouped YAML file.
 
         Parameters
         ----------
@@ -5869,9 +5901,12 @@ class RecommendationManager:
 
         Notes
         -----
-        Each recommendation is converted to a dictionary keyed by ID. Attributes
-        not whitelisted as 'editable' in the class metadata receive a [RO] suffix
-        to prevent accidental modification of the audit trail.
+        The output groups recommendations under top-level stage keys
+        (for example, ``stage_1``). Each recommendation remains keyed by ID
+        within its stage.
+
+        Attributes not whitelisted as 'editable' in the class metadata receive
+        a [RO] suffix to prevent accidental modification of the audit trail.
 
         Returns
         -------
@@ -5879,7 +5914,7 @@ class RecommendationManager:
             The full output path and rejected keyword arguments returned by
             `dsr_files.yaml_handler.save_yaml`.
         """
-        data = {}
+        staged_data: dict[str, dict[str, Any]] = {}
 
         for rec in self._pipeline:
             # Get all fields for this specific recommendation instance
@@ -5889,7 +5924,13 @@ class RecommendationManager:
 
             # Convert the recommendation to its dictionary representation
             rec_dict = rec.to_dict()
-            rec_dict.pop("id", None)  # Remove redundant ID as it is the top-level key
+            rec_dict.pop("id", None)  # ID is the nested key within each stage
+
+            # Ensure explicit_stage is always present in YAML for easy manual editing.
+            stage_number = rec.explicit_stage or self.EXECUTION_PRIORITY.get(
+                rec.rec_type, 999
+            )
+            rec_dict["explicit_stage"] = stage_number
 
             # Apply [RO] indicators to non-editable keys
             processed_rec = {}
@@ -5902,11 +5943,21 @@ class RecommendationManager:
             # Helps resolve concrete class when multiple classes share rec_type.
             processed_rec["class_name [RO]"] = rec.__class__.__name__
 
-            data[rec.id] = processed_rec
+            stage_key = f"stage_{stage_number}"
+            if stage_key not in staged_data:
+                staged_data[stage_key] = {}
+            staged_data[stage_key][rec.id] = processed_rec
+
+        # Preserve deterministic stage ordering in YAML output.
+        sorted_stage_keys = sorted(
+            staged_data.keys(), key=lambda key: self._parse_stage_key(key) or 999
+        )
+        data = {key: staged_data[key] for key in sorted_stage_keys}
 
         header = (
-            "CAUTION: Do not modify the top-level keys (IDs) or keys marked [RO].\n"
-            "Only fields without [RO] (e.g., 'enabled', 'notes') are intended for manual edits.\n"
+            "CAUTION: Top-level keys are stages (e.g., stage_1, stage_2).\n"
+            "Move recommendations between stages to control explicit_stage during clean.\n"
+            "Only fields without [RO] (e.g., 'enabled', 'notes', 'explicit_stage') are intended for manual edits.\n"
             "Modifying [RO] fields will result in those changes being ignored during 'clean'."
         )
 

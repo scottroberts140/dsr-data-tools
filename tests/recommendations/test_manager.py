@@ -103,6 +103,8 @@ def test_manager_save_to_yaml(tmp_path):
     content = filepath.read_text()
     assert "age" in content
     assert "INT_CONVERSION" in content
+    assert "stage_3" in content
+    assert "explicit_stage" in content
 
 
 def test_manager_load_from_yaml_round_trip(tmp_path):
@@ -151,6 +153,31 @@ def test_manager_load_from_yaml_parses_enum_fields(tmp_path):
     assert rec is not None
     assert rec.strategy == MissingValueStrategy.DROP_ROWS
     assert rec.id == "rec_custom_001"
+
+
+def test_manager_load_from_staged_yaml_syncs_explicit_stage(tmp_path):
+    """Verifies stage placement in YAML overrides stale explicit_stage values."""
+    yaml_text = (
+        "stage_2:\n"
+        "  rec_custom_002:\n"
+        "    column_name [RO]: workclass\n"
+        "    description [RO]: Handle missing values\n"
+        "    rec_type [RO]: MISSING_VALUES\n"
+        "    missing_count [RO]: 10\n"
+        "    missing_percentage [RO]: 1.0\n"
+        "    strategy: DROP_ROWS\n"
+        "    explicit_stage: 99\n"
+        "    enabled: true\n"
+    )
+    filepath = tmp_path / "recommendations.yaml"
+    filepath.write_text(yaml_text)
+
+    loaded = RecommendationManager.load_from_yaml(filepath)
+    rec = loaded.get_by_id("rec_custom_002")
+
+    assert isinstance(rec, MissingValuesRecommendation)
+    assert rec is not None
+    assert rec.explicit_stage == 2
 
 
 def test_manager_generates_integer_and_float_recommendations_from_hints():
