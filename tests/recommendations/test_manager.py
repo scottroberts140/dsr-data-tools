@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 from dsr_data_tools.enums import (
     BitDepth,
     EncodingStrategy,
@@ -134,14 +135,15 @@ def test_manager_load_from_yaml_round_trip(tmp_path):
 def test_manager_load_from_yaml_parses_enum_fields(tmp_path):
     """Verifies enum-valued editable fields are restored from YAML strings."""
     yaml_text = (
-        "rec_custom_001:\n"
-        "  column_name [RO]: workclass\n"
-        "  description [RO]: Handle missing values\n"
-        "  rec_type [RO]: MISSING_VALUES\n"
-        "  missing_count [RO]: 1800\n"
-        "  missing_percentage [RO]: 5.5\n"
-        "  strategy: DROP_ROWS\n"
-        "  enabled: true\n"
+        "stage_4:\n"
+        "  rec_custom_001:\n"
+        "    column_name [RO]: workclass\n"
+        "    description [RO]: Handle missing values\n"
+        "    rec_type [RO]: MISSING_VALUES\n"
+        "    missing_count [RO]: 1800\n"
+        "    missing_percentage [RO]: 5.5\n"
+        "    strategy: DROP_ROWS\n"
+        "    enabled: true\n"
     )
     filepath = tmp_path / "recommendations.yaml"
     filepath.write_text(yaml_text)
@@ -153,6 +155,23 @@ def test_manager_load_from_yaml_parses_enum_fields(tmp_path):
     assert rec is not None
     assert rec.strategy == MissingValueStrategy.DROP_ROWS
     assert rec.id == "rec_custom_001"
+
+
+def test_manager_load_from_yaml_rejects_legacy_flat_format(tmp_path):
+    """Verifies flat ID-keyed YAML is no longer accepted."""
+    yaml_text = (
+        "rec_custom_legacy:\n"
+        "  column_name [RO]: workclass\n"
+        "  description [RO]: Handle missing values\n"
+        "  rec_type [RO]: MISSING_VALUES\n"
+        "  strategy: DROP_ROWS\n"
+        "  enabled: true\n"
+    )
+    filepath = tmp_path / "recommendations.yaml"
+    filepath.write_text(yaml_text)
+
+    with pytest.raises(ValueError, match="stage keys only"):
+        RecommendationManager.load_from_yaml(filepath)
 
 
 def test_manager_load_from_staged_yaml_syncs_explicit_stage(tmp_path):

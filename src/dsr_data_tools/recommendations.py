@@ -5806,25 +5806,28 @@ class RecommendationManager:
         payload, _ = load_yaml(filepath)
         if not isinstance(payload, dict):
             raise ValueError(
-                "recommendations.yaml must contain either a mapping of IDs or "
-                "a mapping of stages to recommendation mappings"
+                "recommendations.yaml must contain a mapping of stages to "
+                "recommendation mappings"
             )
 
-        # Supports two YAML layouts:
-        # 1) Legacy: rec_id -> recommendation payload
-        # 2) Staged: stage_N/step_N -> {rec_id -> recommendation payload}
+        # Staged-only YAML layout:
+        # stage_N/step_N -> {rec_id -> recommendation payload}
         flattened_entries: list[tuple[str, dict[str, Any], int | None]] = []
         for top_key, top_value in payload.items():
-            stage_number = cls._parse_stage_key(top_key) if isinstance(top_key, str) else None
-            if stage_number is not None:
-                if not isinstance(top_value, dict):
-                    raise ValueError(
-                        f"Stage '{top_key}' must map to a dictionary of recommendations"
-                    )
-                for rec_id, rec_data in top_value.items():
-                    flattened_entries.append((rec_id, rec_data, stage_number))
-            else:
-                flattened_entries.append((top_key, top_value, None))
+            stage_number = (
+                cls._parse_stage_key(top_key) if isinstance(top_key, str) else None
+            )
+            if stage_number is None:
+                raise ValueError(
+                    "recommendations.yaml must use stage keys only (e.g., "
+                    "'stage_1', 'stage_2')."
+                )
+            if not isinstance(top_value, dict):
+                raise ValueError(
+                    f"Stage '{top_key}' must map to a dictionary of recommendations"
+                )
+            for rec_id, rec_data in top_value.items():
+                flattened_entries.append((rec_id, rec_data, stage_number))
 
         class_map = cls._recommendation_class_map()
         recommendations: list[Recommendation] = []
