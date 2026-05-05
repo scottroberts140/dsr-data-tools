@@ -6,7 +6,7 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import MISSING, asdict, dataclass, field, fields
-from enum import Enum
+from enum import Enum, Flag
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Iterable, cast, get_args, get_origin
 
@@ -2602,6 +2602,23 @@ class FeatureExtractionRecommendation(Recommendation):
         """
         prefix = self.output_prefix if self.output_prefix else f"{self.column_name}_"
         mapping = (self.output_columns or {}).copy()
+        active_keys = {
+            key
+            for prop, key in self._PROPERTY_KEY_MAP.items()
+            if prop in self.properties
+        }
+
+        # Mirror apply(): if one side of a cyclic pair is renamed, infer the mate.
+        for key in list(active_keys):
+            if key.startswith(("sin_", "cos_")):
+                mate = ("cos_" if "sin_" in key else "sin_") + key[4:]
+                if key in mapping and mate not in mapping:
+                    mapping[mate] = (
+                        mapping[key].replace("sin", "cos", 1)
+                        if "sin" in mapping[key]
+                        else mapping[key].replace("cos", "sin", 1)
+                    )
+
         result: set[str] = set()
         for prop, key in self._PROPERTY_KEY_MAP.items():
             if prop in self.properties:
@@ -5737,9 +5754,24 @@ class RecommendationManager:
         if origin is None:
             if isinstance(annotation, type) and issubclass(annotation, Enum):
                 if isinstance(value, str):
+                    if issubclass(annotation, Flag) and "|" in value:
+                        combined = annotation(0)
+                        for token in value.split("|"):
+                            normalized_token = token.strip().upper()
+                            if not normalized_token:
+                                continue
+                            try:
+                                combined |= annotation[normalized_token]
+                            except KeyError:
+                                return value
+                        return combined
                     normalized = value.strip().upper()
                     for member in annotation:
-                        if member.name.upper() == normalized:
+                        member_name = member.name
+                        if (
+                            member_name is not None
+                            and member_name.upper() == normalized
+                        ):
                             return member
                         if str(member.value).upper() == normalized:
                             return member

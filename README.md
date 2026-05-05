@@ -113,6 +113,14 @@ rec = DatetimeDurationRecommendation(
 df = rec.apply(df)
 ```
 
+### Cyclic Feature Naming and Staging
+
+For `FeatureExtractionRecommendation`, cyclic output names are treated as paired features.
+
+- If you rename only one side (for example `sin_hour`) via `output_columns`, the paired name (`cos_hour`) is inferred automatically.
+- This inferred pairing is applied both when features are written during `apply()` and when `RecommendationManager` validates staged dependencies.
+- A later-stage recommendation can safely reference the inferred paired column without adding an explicit second mapping.
+
 ### Interactive Missing Value handling
 
 The engine allows choosing between statistical imputation (mean/median/mode), constant filling, or row/column removal.

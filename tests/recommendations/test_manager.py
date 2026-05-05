@@ -13,6 +13,7 @@ from dsr_data_tools.recommendations import (
     BooleanClassificationRecommendation,
     ColumnHint,
     EncodingRecommendation,
+    FeatureExtractionRecommendation,
     FeatureInteractionRecommendation,
     FloatConversionRecommendation,
     IntegerConversionRecommendation,
@@ -21,6 +22,7 @@ from dsr_data_tools.recommendations import (
     RecommendationManager,
     ValueReplacementRecommendation,
 )
+from dsr_utils.enums import DatetimeProperty
 
 
 def test_recommendation_ids_are_stable():
@@ -155,6 +157,64 @@ def test_manager_load_from_yaml_parses_enum_fields(tmp_path):
     assert rec is not None
     assert rec.strategy == MissingValueStrategy.DROP_ROWS
     assert rec.id == "rec_custom_001"
+
+
+def test_manager_load_from_yaml_parses_flag_enum_fields(tmp_path):
+    """Verifies pipe-delimited Flag values are restored from YAML strings."""
+    yaml_text = (
+        "stage_4:\n"
+        "  rec_custom_002:\n"
+        "    column_name: pickup_time\n"
+        "    description: Extract cyclic datetime features\n"
+        "    rec_type [RO]: FEATURE_EXTRACTION\n"
+        "    properties: DAYOFWEEK|HOUR|SIN_HOUR|COS_HOUR\n"
+        "    output_prefix: ''\n"
+        "    enabled: true\n"
+    )
+    filepath = tmp_path / "recommendations.yaml"
+    filepath.write_text(yaml_text)
+
+    loaded = RecommendationManager.load_from_yaml(filepath)
+    rec = loaded.get_by_id("rec_custom_002")
+
+    assert isinstance(rec, FeatureExtractionRecommendation)
+    assert rec is not None
+    assert rec.properties == (
+        DatetimeProperty.DAYOFWEEK
+        | DatetimeProperty.HOUR
+        | DatetimeProperty.SIN_HOUR
+        | DatetimeProperty.COS_HOUR
+    )
+
+
+def test_validate_pipeline_recognizes_inferred_cyclic_output_names():
+    """Validation should see inferred cos_* outputs when sin_* is explicitly renamed."""
+    df = pd.DataFrame(
+        {
+            "pickup_time": pd.to_datetime(
+                ["2025-01-01 08:00:00", "2025-01-01 09:00:00"]
+            ),
+            "dropoff_hour_cos": [None, 1.0],
+        }
+    )
+
+    extract = FeatureExtractionRecommendation(
+        column_name="pickup_time",
+        description="Extract pickup hour cyclic features",
+        properties=DatetimeProperty.SIN_HOUR | DatetimeProperty.COS_HOUR,
+        output_columns={"sin_hour": "pickup_hour_sin"},
+        explicit_stage=6,
+    )
+
+    consume = MissingValuesRecommendation(
+        column_name="pickup_hour_cos",
+        description="Impute generated cosine feature",
+        strategy=MissingValueStrategy.IMPUTE_MEDIAN,
+        explicit_stage=7,
+    )
+
+    manager = RecommendationManager(recommendations=[extract, consume])
+    manager._validate_pipeline(df)
 
 
 def test_manager_load_from_yaml_rejects_legacy_flat_format(tmp_path):

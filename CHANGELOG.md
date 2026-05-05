@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.1] - 2026-05-05
 
 ### Added
 
@@ -23,18 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Stage-Only YAML Contract**: Flat ID-keyed recommendation YAML loading has been removed. `load_from_yaml()` now requires stage-grouped YAML (`stage_N` / `step_N`) with optional `unassigned`.
 * **`FeatureExtractionRecommendation` — `_PROPERTY_KEY_MAP`**: Added a `ClassVar` mapping from `DatetimeProperty` to feature key string. Used by `produced_columns()` to compute expected output column names from `properties` and `output_columns` configuration.
 * **Stable ID Computation**: `explicit_stage` is excluded from the stable ID payload so that changing the stage hint for an existing recommendation does not alter its tracked identity.
-
 * **Expanded ColumnHint Coverage**: Added `ColumnHint` support for integer conversion, float conversion, boolean conversion, binning, value replacement, encoding, feature interaction, outlier detection, and explicit missing-value handling.
-
-### Changed
-
 * **Hint-to-Recommendation Translation**: Extended `RecommendationManager._apply_column_hint()` so the new `ColumnHintType` values generate locked recommendation objects with the metadata needed for downstream execution.
 * **ColumnHint Documentation**: Expanded README guidance to clarify which recommendation types are representable as `ColumnHint` values and explicitly documented that `ClassImbalanceRecommendation` remains advisory-only.
-
 * **Bucketing Message Formatting**: Normalized `_apply_bucketing` status message formatting to a single stable line for clearer logging output and snapshot diff readability.
 
 ### Fixed
 
+* **`Flag` Enum Deserialization**: `_deserialize_value` now correctly parses pipe-delimited `Flag` enum values (e.g., `DAYOFWEEK|HOUR|SIN_HOUR|COS_HOUR` for `DatetimeProperty`) loaded from YAML, restoring combined flag members instead of raising a type error.
+* **Cyclic Feature `produced_columns()` Inference**: `FeatureExtractionRecommendation.produced_columns()` now mirrors the sin/cos mate-name inference performed by `apply()`. When `output_columns` renames one side of a cyclic pair, the complementary output name is derived using the same substitution logic, so staged pipeline validation correctly resolves the inferred column names.
 * **Preprocessing Regression Coverage**: Strengthened preprocessing unit tests around bucketing outputs and message assertions to reduce formatting-related false negatives in CI.
 
 ## [2.1.0] - 2026-04-22
