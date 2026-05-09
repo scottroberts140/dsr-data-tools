@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] - 2026-05-09
+
+### Added
+
+* **`ColumnHint` Rationale and Documentation Fields**: Added optional `description` and `notes` fields to `ColumnHint` dataclass to capture user intent and documentation:
+  - `description`: Optional rationale appended to generated recommendation descriptions for surfacing user intent in summary views.
+  - `notes`: Optional user documentation copied into generated recommendation notes and preserved as editable metadata in recommendation YAML.
+
+### Changed
+
+* **Hint-to-Recommendation Propagation**: Refactored `RecommendationManager._apply_column_hint()` to use a helper function `_append_hint_recommendation()` that consolidates recommendation creation with automatic propagation of hint `description` and `notes` into the recommendation's corresponding fields. This reduces code duplication across all hint types and ensures consistent behavior.
+
+### Fixed
+
+* **Hint Metadata Preservation**: Description and notes from `ColumnHint` are now reliably propagated to generated recommendations, enabling better traceability and documentation in downstream views (e.g., experiment summaries and recommendation YAML exports).
+
 ## [2.2.1] - 2026-05-05
 
 ### Added

@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 from dsr_data_tools.enums import (
     BitDepth,
+    ColumnHintType,
     EncodingStrategy,
     InteractionType,
     MissingValueStrategy,
@@ -419,6 +420,42 @@ def test_manager_generates_encoding_and_interaction_from_hints():
     assert rec_fare.rationale == "fare per mile"
     assert rec_fare.derived_name == "fare_per_mile"
     assert rec_fare.is_locked is True
+
+
+def test_manager_propagates_hint_description_and_notes_to_recommendations():
+    df = pd.DataFrame({"count": [1.0, 2.0, 3.0]})
+
+    manager = RecommendationManager()
+    manager.generate_recommendations(
+        df,
+        hints={
+            "count": ColumnHint.integer(
+                target_depth=BitDepth.INT64,
+            )
+        },
+        hints_only=True,
+    )
+
+    # Re-run with user documentation fields to verify propagation.
+    manager.clear()
+    manager.generate_recommendations(
+        df,
+        hints={
+            "count": ColumnHint(
+                logical_type=ColumnHintType.INTEGER,
+                target_depth=BitDepth.INT64,
+                description="Preserve integer semantics for downstream joins",
+                notes="Source system treats this as a strict integer key.",
+            )
+        },
+        hints_only=True,
+    )
+
+    rec = next(rec for rec in manager._pipeline if rec.column_name == "count")
+
+    assert isinstance(rec, IntegerConversionRecommendation)
+    assert "Hint: Preserve integer semantics for downstream joins" in rec.description
+    assert rec.notes == "Source system treats this as a strict integer key."
 
 
 def test_manager_generates_outlier_detection_from_hints():

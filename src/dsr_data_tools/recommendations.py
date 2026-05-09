@@ -3002,6 +3002,12 @@ class ColumnHint:
     missing_fill_value : str, int, float, or None, optional
         The fill value to use when ``missing_value_strategy`` is
         ``MissingValueStrategy.FILL_VALUE``.
+    description : str, optional
+        Optional rationale appended to generated recommendation descriptions.
+        Useful for surfacing user intent directly in summary views.
+    notes : str, optional
+        Optional user documentation copied into generated recommendation notes.
+        Notes are preserved as editable metadata in recommendation YAML.
 
     Notes
     -----
@@ -3041,6 +3047,8 @@ class ColumnHint:
     should_drop: bool = False
     missing_value_strategy: MissingValueStrategy | None = None
     missing_fill_value: str | int | float | None = None
+    description: str | None = None
+    notes: str | None = None
 
     @classmethod
     def datetime(
@@ -4478,6 +4486,17 @@ class RecommendationManager:
         """
         user_note = " [User Hint Applied]"
 
+        hint_description = (hint.description or "").strip()
+        hint_notes = (hint.notes or "").strip()
+
+        def _append_hint_recommendation(rec: Recommendation) -> None:
+            if hint_description:
+                rec.description = f"{rec.description} (Hint: {hint_description})"
+            if hint_notes:
+                rec.notes = hint_notes
+            rec.is_locked = True
+            self._pipeline.append(rec)
+
         # 1. Immediate Exit: User wants to bypass analysis
         if hint.is_ignored:
             return
@@ -4489,8 +4508,7 @@ class RecommendationManager:
                 description=f"Drop column '{col_name}' [User Hint: Forced Drop]",
                 reason="Forced drop via user hint",
             )
-            rec_drop.is_locked = True
-            self._pipeline.append(rec_drop)
+            _append_hint_recommendation(rec_drop)
             return
 
         # 3. Missing Value Strategy (composable with logical_type hints)
@@ -4508,8 +4526,7 @@ class RecommendationManager:
                 strategy=hint.missing_value_strategy,
                 fill_value=hint.missing_fill_value,
             )
-            rec_mv.is_locked = True
-            self._pipeline.append(rec_mv)
+            _append_hint_recommendation(rec_mv)
 
         # 4. Explicit Integer Conversion
         if hint.logical_type == ColumnHintType.INTEGER:
@@ -4530,8 +4547,7 @@ class RecommendationManager:
                 target_depth=target_depth,
                 integer_count=integer_count,
             )
-            rec_int.is_locked = True
-            self._pipeline.append(rec_int)
+            _append_hint_recommendation(rec_int)
             return
 
         # 5. Explicit Float Conversion
@@ -4547,8 +4563,7 @@ class RecommendationManager:
                 description=f"Convert '{col_name}' to {target_depth.name}{user_note}",
                 target_depth=target_depth,
             )
-            rec_float.is_locked = True
-            self._pipeline.append(rec_float)
+            _append_hint_recommendation(rec_float)
             return
 
         # 6. Explicit Boolean Conversion
@@ -4563,8 +4578,7 @@ class RecommendationManager:
                 description=f"Convert '{col_name}' to boolean{user_note}",
                 values=list(hint.boolean_values),
             )
-            rec_bool.is_locked = True
-            self._pipeline.append(rec_bool)
+            _append_hint_recommendation(rec_bool)
             return
 
         # 7. Explicit Binning
@@ -4584,8 +4598,7 @@ class RecommendationManager:
                 bins=list(hint.binning_bins),
                 labels=list(hint.binning_labels),
             )
-            rec_bin.is_locked = True
-            self._pipeline.append(rec_bin)
+            _append_hint_recommendation(rec_bin)
             return
 
         # 8. Explicit Value Replacement
@@ -4607,8 +4620,7 @@ class RecommendationManager:
                     else np.nan
                 ),
             )
-            rec_replace.is_locked = True
-            self._pipeline.append(rec_replace)
+            _append_hint_recommendation(rec_replace)
             return
 
         # 9. Explicit Encoding
@@ -4620,8 +4632,7 @@ class RecommendationManager:
                 encoder_type=strategy,
                 unique_values=int(series.nunique(dropna=True)),
             )
-            rec_encoding.is_locked = True
-            self._pipeline.append(rec_encoding)
+            _append_hint_recommendation(rec_encoding)
             return
 
         # 10. Explicit Feature Interaction
@@ -4650,8 +4661,7 @@ class RecommendationManager:
                 rationale=hint.interaction_rationale or "",
                 derived_name=hint.interaction_derived_name or "",
             )
-            rec_interaction.is_locked = True
-            self._pipeline.append(rec_interaction)
+            _append_hint_recommendation(rec_interaction)
             return
 
         # 11. Explicit Outlier Detection
@@ -4666,8 +4676,7 @@ class RecommendationManager:
                 max_value=float(series.max()) if len(series.dropna()) > 0 else 0.0,
                 mean_value=float(series.mean()) if len(series.dropna()) > 0 else 0.0,
             )
-            rec_outlier.is_locked = True
-            self._pipeline.append(rec_outlier)
+            _append_hint_recommendation(rec_outlier)
             return
 
         # 12. Datetime Logic
@@ -4683,8 +4692,7 @@ class RecommendationManager:
                     description=f"Convert '{col_name}' to datetime{fmt_desc}{user_note}",
                     detected_format=hint.datetime_format,
                 )
-                rec_dt.is_locked = True
-                self._pipeline.append(rec_dt)
+                _append_hint_recommendation(rec_dt)
 
             props = DatetimeProperty(0)
             if hint.datetime_features:
@@ -4697,8 +4705,7 @@ class RecommendationManager:
                 properties=props,
                 output_columns=hint.output_names,
             )
-            extraction_rec.is_locked = True
-            self._pipeline.append(extraction_rec)
+            _append_hint_recommendation(extraction_rec)
             return
 
         # 13. Distance Logic
@@ -4713,8 +4720,7 @@ class RecommendationManager:
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
             )
-            rec_distance.is_locked = True
-            self._pipeline.append(rec_distance)
+            _append_hint_recommendation(rec_distance)
             return
 
         # 14. Geospatial Logic
@@ -4728,8 +4734,7 @@ class RecommendationManager:
                     lower_bound=float(lat_lower),
                     upper_bound=float(lat_upper),
                 )
-                rec_lat.is_locked = True
-                self._pipeline.append(rec_lat)
+                _append_hint_recommendation(rec_lat)
 
             if hint.lon_bounds is not None:
                 lon_lower, lon_upper = hint.lon_bounds
@@ -4740,8 +4745,7 @@ class RecommendationManager:
                     lower_bound=float(lon_lower),
                     upper_bound=float(lon_upper),
                 )
-                rec_lon.is_locked = True
-                self._pipeline.append(rec_lon)
+                _append_hint_recommendation(rec_lon)
             return
 
         # 15. Aggregation Logic
@@ -4770,8 +4774,7 @@ class RecommendationManager:
                 ),
                 scale_factor=hint.scale_factor,
             )
-            rec_agg.is_locked = True
-            self._pipeline.append(rec_agg)
+            _append_hint_recommendation(rec_agg)
             return
 
         # 16. Numeric & Financial Logic
@@ -4793,8 +4796,7 @@ class RecommendationManager:
                     lower_bound=lower,
                     upper_bound=upper,
                 )
-                rec_clip.is_locked = True
-                self._pipeline.append(rec_clip)
+                _append_hint_recommendation(rec_clip)
 
             non_null = series.dropna()
             if (
@@ -4811,8 +4813,7 @@ class RecommendationManager:
                     description=f"Convert '{col_name}' to int64{user_note}",
                     integer_count=integer_count,
                 )
-                rec_int.is_locked = True
-                self._pipeline.append(rec_int)
+                _append_hint_recommendation(rec_int)
             elif hint.decimal_places is not None:
                 min_val = float(non_null.min()) if len(non_null) > 0 else float("nan")
                 max_val = float(non_null.max()) if len(non_null) > 0 else float("nan")
@@ -4830,8 +4831,7 @@ class RecommendationManager:
                     ),
                     scale_factor=hint.scale_factor,
                 )
-                rec_dec.is_locked = True
-                self._pipeline.append(rec_dec)
+                _append_hint_recommendation(rec_dec)
             return
 
         # 17. Categorical Logic
@@ -4841,8 +4841,7 @@ class RecommendationManager:
                 description=f"Convert '{col_name}' to categorical{user_note}",
                 unique_values=int(series.nunique()),
             )
-            rec_cat.is_locked = True
-            self._pipeline.append(rec_cat)
+            _append_hint_recommendation(rec_cat)
             return
 
     def _is_string_datetime(self, sample: pd.Series) -> tuple[bool, str | None]:
