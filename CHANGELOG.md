@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * **`ColumnHint` Rationale and Documentation Fields**: Added optional `description` and `notes` fields to `ColumnHint` dataclass to capture user intent and documentation:
-  - `description`: Optional rationale appended to generated recommendation descriptions for surfacing user intent in summary views.
-  - `notes`: Optional user documentation copied into generated recommendation notes and preserved as editable metadata in recommendation YAML.
+  * `description`: Optional rationale appended to generated recommendation descriptions for surfacing user intent in summary views.
+  * `notes`: Optional user documentation copied into generated recommendation notes and preserved as editable metadata in recommendation YAML.
 
 ### Changed
 
