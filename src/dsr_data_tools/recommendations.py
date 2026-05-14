@@ -1392,6 +1392,180 @@ class BooleanClassificationRecommendation(Recommendation):
 
 
 @dataclass
+class NonZeroFlagRecommendation(Recommendation):
+    """
+    Create a derived flag column for values above a numeric threshold.
+
+    Parameters
+    ----------
+    column_name : str
+        Source numeric column used to compute the flag.
+    output_column : str, optional
+        Name of the derived flag column.
+    threshold : float, default 0.0
+        Values greater than this threshold are flagged.
+    flag_value : Any, default True
+        Value assigned when the threshold condition is met.
+    false_value : Any, default False
+        Value assigned when the threshold condition is not met.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
+    """
+
+    output_column: str = field(default="", metadata={"editable": True})
+    threshold: float = field(default=0.0, metadata={"editable": True})
+    flag_value: Any = field(default=True, metadata={"editable": True})
+    false_value: Any = field(default=False, metadata={"editable": True})
+
+    @property
+    def rec_type(self) -> RecommendationType:
+        """Return the recommendation type used for staged execution."""
+        return RecommendationType.FEATURE_EXTRACTION
+
+    def __post_init__(self) -> None:
+        """Compute the stable identity and lock identity-defining fields."""
+        self.id = self.compute_stable_id()
+        self._lock_fields()
+
+    def required_columns(self) -> set[str]:
+        """Return the source column required to derive the flag."""
+        return {self.column_name}
+
+    def produced_columns(self) -> set[str]:
+        """Return the derived flag column produced by this recommendation."""
+        return {self.output_column} if self.output_column else set()
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Derive a binary flag from values greater than the configured threshold.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The input DataFrame.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the derived flag column added.
+        """
+        if (
+            not self.column_name
+            or not self.output_column
+            or self.column_name not in df.columns
+        ):
+            return df
+
+        numeric_values = pd.to_numeric(df[self.column_name], errors="coerce")
+        df[self.output_column] = np.where(
+            numeric_values > self.threshold,
+            self.flag_value,
+            self.false_value,
+        )
+        return df
+
+    def info(self) -> None:
+        """Print a human-readable summary of the derived flag recommendation."""
+        print("  Recommendation: FEATURE_EXTRACTION")
+        print(f"    ID: {self.id}")
+        print(f"    Enabled: {self.enabled}")
+        print(f"    Source Column: '{self.column_name}'")
+        print(f"    Output Column: '{self.output_column}'")
+        print(f"    Threshold: {self.threshold}")
+
+
+@dataclass
+class StringMatchFlagRecommendation(Recommendation):
+    """
+    Create a derived flag column for exact string matches.
+
+    Parameters
+    ----------
+    column_name : str
+        Source string column used to evaluate the match condition.
+    output_column : str, optional
+        Name of the derived flag column.
+    match_values : list of str, optional
+        String values that should evaluate to the flag value.
+    case_sensitive : bool, default False
+        If True, string comparison is case-sensitive.
+    flag_value : Any, default True
+        Value assigned when a match is found.
+    false_value : Any, default False
+        Value assigned when a match is not found.
+    **kwargs : dict
+        Additional keyword arguments passed to the Recommendation base class.
+    """
+
+    output_column: str = field(default="", metadata={"editable": True})
+    match_values: list[str] = field(default_factory=list, metadata={"editable": True})
+    case_sensitive: bool = field(default=False, metadata={"editable": True})
+    flag_value: Any = field(default=True, metadata={"editable": True})
+    false_value: Any = field(default=False, metadata={"editable": True})
+
+    @property
+    def rec_type(self) -> RecommendationType:
+        """Return the recommendation type used for staged execution."""
+        return RecommendationType.FEATURE_EXTRACTION
+
+    def __post_init__(self) -> None:
+        """Compute the stable identity and lock identity-defining fields."""
+        self.id = self.compute_stable_id()
+        self._lock_fields()
+
+    def required_columns(self) -> set[str]:
+        """Return the source column required to derive the flag."""
+        return {self.column_name}
+
+    def produced_columns(self) -> set[str]:
+        """Return the derived flag column produced by this recommendation."""
+        return {self.output_column} if self.output_column else set()
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Derive a binary flag from exact string matches.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The input DataFrame.
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with the derived flag column added.
+        """
+        if (
+            not self.column_name
+            or not self.output_column
+            or self.column_name not in df.columns
+            or not self.match_values
+        ):
+            return df
+
+        source = df[self.column_name].astype(str)
+        if self.case_sensitive:
+            match_set = set(self.match_values)
+            mask = source.isin(match_set)
+        else:
+            match_set = {value.lower() for value in self.match_values}
+            mask = source.str.lower().isin(match_set)
+
+        df[self.output_column] = np.where(mask, self.flag_value, self.false_value)
+        return df
+
+    def info(self) -> None:
+        """Print a human-readable summary of the derived flag recommendation."""
+        print("  Recommendation: FEATURE_EXTRACTION")
+        print(f"    ID: {self.id}")
+        print(f"    Enabled: {self.enabled}")
+        print(f"    Source Column: '{self.column_name}'")
+        print(f"    Output Column: '{self.output_column}'")
+        print(f"    Match Values: {self.match_values}")
+        print(f"    Case Sensitive: {self.case_sensitive}")
+
+
+@dataclass
 class BinningRecommendation(Recommendation):
     """
     Recommendation to discretize a continuous numeric column into range-based bins.
@@ -3918,7 +4092,14 @@ class RecommendationManager:
                     RecommendationType.FEATURE_EXTRACTION,
                     RecommendationType.ENCODING,
                 )
-                if is_transformative and rec.column_name in result.columns:
+                preserves_source = isinstance(
+                    rec, (NonZeroFlagRecommendation, StringMatchFlagRecommendation)
+                )
+                if (
+                    is_transformative
+                    and not preserves_source
+                    and rec.column_name in result.columns
+                ):
                     garbage_collector.add(rec.column_name)
 
         # 5. Final Cleanup: Drop source columns if they weren't overwritten
@@ -3986,6 +4167,9 @@ class RecommendationManager:
                 RecommendationType.DATETIME_CONVERSION,
                 RecommendationType.FEATURE_EXTRACTION,
                 RecommendationType.ENCODING,
+            )
+            and not isinstance(
+                r, (NonZeroFlagRecommendation, StringMatchFlagRecommendation)
             )
         }
 
@@ -5688,6 +5872,8 @@ class RecommendationManager:
             RecommendationType.FEATURE_EXTRACTION: [
                 FeatureExtractionRecommendation,
                 DatetimeDurationRecommendation,
+                NonZeroFlagRecommendation,
+                StringMatchFlagRecommendation,
             ],
             RecommendationType.FEATURE_AGGREGATION: [AggregationRecommendation],
         }

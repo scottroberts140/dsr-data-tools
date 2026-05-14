@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 2.1.0**: Added robust YAML round-trip support via `RecommendationManager.load_from_yaml()`, including enum-safe deserialization and concrete class resolution for persisted recommendations.
+**Version 2.2.3**: Added derived flag recommendations for numeric threshold and exact string matching workflows, plus manager support for staged YAML hydration and snippet coverage for the new recommendation shapes.
 
 ## Features
 
