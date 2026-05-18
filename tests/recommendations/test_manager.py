@@ -2,21 +2,25 @@ import pandas as pd
 import pytest
 from dsr_data_tools.enums import (
     BitDepth,
+    CalculationOperation,
     ColumnHintType,
     EncodingStrategy,
     InteractionType,
     MissingValueStrategy,
     OutlierStrategy,
     RecommendationType,
+    TransformFunction,
 )
 from dsr_data_tools.recommendations import (
     BinningRecommendation,
     BooleanClassificationRecommendation,
+    ColumnCalculationRecommendation,
     ColumnHint,
     EncodingRecommendation,
     FeatureExtractionRecommendation,
     FeatureInteractionRecommendation,
     FloatConversionRecommendation,
+    FunctionApplyRecommendation,
     IntegerConversionRecommendation,
     MissingValuesRecommendation,
     OutlierDetectionRecommendation,
@@ -190,14 +194,10 @@ def test_manager_load_from_yaml_parses_flag_enum_fields(tmp_path):
 
 def test_validate_pipeline_recognizes_inferred_cyclic_output_names():
     """Validation should see inferred cos_* outputs when sin_* is explicitly renamed."""
-    df = pd.DataFrame(
-        {
-            "pickup_time": pd.to_datetime(
-                ["2025-01-01 08:00:00", "2025-01-01 09:00:00"]
-            ),
-            "dropoff_hour_cos": [None, 1.0],
-        }
-    )
+    df = pd.DataFrame({
+        "pickup_time": pd.to_datetime(["2025-01-01 08:00:00", "2025-01-01 09:00:00"]),
+        "dropoff_hour_cos": [None, 1.0],
+    })
 
     extract = FeatureExtractionRecommendation(
         column_name="pickup_time",
@@ -331,13 +331,11 @@ def test_manager_generates_integer_and_float_recommendations_from_hints():
 
 
 def test_manager_generates_boolean_binning_and_replacement_from_hints():
-    df = pd.DataFrame(
-        {
-            "flag": ["Y", "N", "Y"],
-            "age": [10, 25, 40],
-            "score": ["10", "n/a", "25"],
-        }
-    )
+    df = pd.DataFrame({
+        "flag": ["Y", "N", "Y"],
+        "age": [10, 25, 40],
+        "score": ["10", "n/a", "25"],
+    })
 
     manager = RecommendationManager()
     manager.generate_recommendations(
@@ -377,13 +375,11 @@ def test_manager_generates_boolean_binning_and_replacement_from_hints():
 
 
 def test_manager_generates_encoding_and_interaction_from_hints():
-    df = pd.DataFrame(
-        {
-            "category": ["a", "b", "a"],
-            "fare_amount": [10.0, 20.0, 30.0],
-            "trip_distance": [2.0, 4.0, 6.0],
-        }
-    )
+    df = pd.DataFrame({
+        "category": ["a", "b", "a"],
+        "fare_amount": [10.0, 20.0, 30.0],
+        "trip_distance": [2.0, 4.0, 6.0],
+    })
 
     manager = RecommendationManager()
     manager.generate_recommendations(
@@ -420,6 +416,46 @@ def test_manager_generates_encoding_and_interaction_from_hints():
     assert rec_fare.rationale == "fare per mile"
     assert rec_fare.derived_name == "fare_per_mile"
     assert rec_fare.is_locked is True
+
+
+def test_manager_generates_calculation_and_function_from_hints():
+    df = pd.DataFrame({
+        "capital_gain": [100.0, 50.0, 0.0],
+        "capital_loss": [25.0, 10.0, 0.0],
+    })
+
+    manager = RecommendationManager()
+    manager.generate_recommendations(
+        df,
+        hints={
+            "capital_gain": ColumnHint.calculation(
+                operation=CalculationOperation.SUBTRACT,
+                right_column="capital_loss",
+                output_name="net_capital",
+            ),
+            "capital_loss": ColumnHint.function(
+                function_name=TransformFunction.LOG1P,
+                output_name="log_capital_loss",
+            ),
+        },
+        hints_only=True,
+    )
+
+    rec_calc = next(
+        rec for rec in manager._pipeline if rec.column_name == "capital_gain"
+    )
+    rec_fn = next(rec for rec in manager._pipeline if rec.column_name == "capital_loss")
+
+    assert isinstance(rec_calc, ColumnCalculationRecommendation)
+    assert rec_calc.operation == CalculationOperation.SUBTRACT
+    assert rec_calc.right_column == "capital_loss"
+    assert rec_calc.output_column == "net_capital"
+    assert rec_calc.is_locked is True
+
+    assert isinstance(rec_fn, FunctionApplyRecommendation)
+    assert rec_fn.function_name == TransformFunction.LOG1P
+    assert rec_fn.output_column == "log_capital_loss"
+    assert rec_fn.is_locked is True
 
 
 def test_manager_propagates_hint_description_and_notes_to_recommendations():

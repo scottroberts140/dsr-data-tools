@@ -13,6 +13,7 @@ from dsr_data_tools.analysis import (
 )
 from dsr_data_tools.enums import (
     BitDepth,
+    CalculationOperation,
     ColumnHintType,
     EncodingStrategy,
     ImbalanceStrategy,
@@ -22,6 +23,7 @@ from dsr_data_tools.enums import (
     OutlierStrategy,
     RecommendationType,
     RoundingMode,
+    TransformFunction,
 )
 from dsr_data_tools.preprocessing import apply_preprocessing
 from dsr_data_tools.recommendations import (
@@ -30,6 +32,7 @@ from dsr_data_tools.recommendations import (
     BooleanClassificationRecommendation,
     CategoricalConversionRecommendation,
     ClassImbalanceRecommendation,
+    ColumnCalculationRecommendation,
     ColumnHint,
     DatetimeConversionRecommendation,
     DatetimeDurationRecommendation,
@@ -38,6 +41,7 @@ from dsr_data_tools.recommendations import (
     FeatureExtractionRecommendation,
     FeatureInteractionRecommendation,
     FloatConversionRecommendation,
+    FunctionApplyRecommendation,
     IntegerConversionRecommendation,
     MissingValuesRecommendation,
     NonInformativeRecommendation,
@@ -66,11 +70,13 @@ __all__ = [
     "CategoricalConversionRecommendation",
     "BooleanClassificationRecommendation",
     "BinningRecommendation",
+    "ColumnCalculationRecommendation",
     "IntegerConversionRecommendation",
     "FloatConversionRecommendation",
     "DecimalPrecisionRecommendation",
     "ValueReplacementRecommendation",
     "FeatureInteractionRecommendation",
+    "FunctionApplyRecommendation",
     "DatetimeConversionRecommendation",
     "FeatureExtractionRecommendation",
     "DatetimeDurationRecommendation",
@@ -86,6 +92,8 @@ __all__ = [
     "ColumnHintType",
     "RoundingMode",
     "BitDepth",
+    "CalculationOperation",
+    "TransformFunction",
     "__version__",
 ]
 

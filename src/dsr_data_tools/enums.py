@@ -43,6 +43,10 @@ class RecommendationType(Enum):
         Convert to pandas categorical dtype for memory optimization.
     FEATURE_AGGREGATION : str
         Aggregate multiple columns into a new feature (sum, mean, etc.).
+    FEATURE_CALCULATION : str
+        Compute a new feature from a simple operation between columns/values.
+    FEATURE_FUNCTION : str
+        Apply a common ML-oriented function to a numeric column.
     """
 
     NON_INFORMATIVE = "non_informative"
@@ -62,6 +66,8 @@ class RecommendationType(Enum):
     FEATURE_EXTRACTION = "feature_extraction"
     CATEGORICAL_CONVERSION = "categorical_conversion"
     FEATURE_AGGREGATION = "feature_aggregation"
+    FEATURE_CALCULATION = "feature_calculation"
+    FEATURE_FUNCTION = "feature_function"
 
 
 class InteractionType(Enum):
@@ -81,6 +87,29 @@ class InteractionType(Enum):
     STATUS_IMPACT = "status_impact"
     RESOURCE_DENSITY = "resource_density"
     PRODUCT_UTILIZATION = "product_utilization"
+
+
+class CalculationOperation(Enum):
+    """Supported binary operations for simple feature calculations."""
+
+    ADD = "+"
+    SUBTRACT = "-"
+    MULTIPLY = "*"
+    DIVIDE = "/"
+
+
+class TransformFunction(Enum):
+    """Supported unary transforms for ML-oriented feature engineering."""
+
+    LOG1P = "log1p"
+    LOG = "log"
+    SQRT = "sqrt"
+    SQUARE = "square"
+    ABS = "abs"
+    EXP = "exp"
+    RECIPROCAL = "reciprocal"
+    STANDARDIZE = "standardize"
+    MINMAX_SCALE = "minmax_scale"
 
 
 class EncodingStrategy(Enum):
@@ -229,6 +258,10 @@ class ColumnHintType(Enum):
         Engineer an interaction feature using this column and another column.
     OUTLIER_DETECTION : str
         Apply an outlier mitigation strategy such as scaling or removal.
+    CALCULATION : str
+        Apply a simple operation between two operands to create a feature.
+    FUNCTION : str
+        Apply a unary transform function (e.g., log1p, sqrt) to a feature.
     """
 
     DATETIME = "datetime"
@@ -246,6 +279,8 @@ class ColumnHintType(Enum):
     ENCODING = "encoding"
     FEATURE_INTERACTION = "feature_interaction"
     OUTLIER_DETECTION = "outlier_detection"
+    CALCULATION = "calculation"
+    FUNCTION = "function"
 
 
 class RoundingMode(Enum):

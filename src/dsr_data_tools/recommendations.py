@@ -23,6 +23,7 @@ from dsr_utils.enums import DatetimeProperty
 
 from dsr_data_tools.enums import (
     BitDepth,
+    CalculationOperation,
     ColumnHintType,
     EncodingStrategy,
     ImbalanceStrategy,
@@ -32,6 +33,7 @@ from dsr_data_tools.enums import (
     OutlierStrategy,
     RecommendationType,
     RoundingMode,
+    TransformFunction,
 )
 
 
@@ -3100,6 +3102,219 @@ class AggregationRecommendation(Recommendation):
 
 
 @dataclass
+class ColumnCalculationRecommendation(Recommendation):
+    """
+    Recommendation to create a feature from a simple binary column/value calculation.
+
+    Supports direct operations between the anchor ``column_name`` and either:
+    1) another column via ``right_column``
+    2) a scalar via ``right_value``
+
+    Parenthetical expression parsing is intentionally not supported. This class is
+    designed for common, auditable feature math such as ``a - b`` or ``a / 100``.
+    """
+
+    @property
+    def rec_type(self) -> RecommendationType:
+        """Always returns RecommendationType.FEATURE_CALCULATION."""
+        return RecommendationType.FEATURE_CALCULATION
+
+    operation: CalculationOperation = field(
+        default=CalculationOperation.SUBTRACT, metadata={"editable": True}
+    )
+    right_column: str | None = field(default=None, metadata={"editable": True})
+    right_value: float | None = field(default=None, metadata={"editable": True})
+    output_column: str = field(default="", metadata={"editable": True})
+    safe_divide: bool = field(default=True, metadata={"editable": True})
+
+    def __post_init__(self):
+        self.id = self.compute_stable_id()
+        self._lock_fields()
+
+    def _resolve_right_operand(self, df: pd.DataFrame) -> pd.Series:
+        """Resolve the right-hand operand series from either column or scalar."""
+        has_col = bool(self.right_column)
+        has_val = self.right_value is not None
+
+        if has_col == has_val:
+            raise ValueError(
+                "ColumnCalculationRecommendation requires exactly one of "
+                "right_column or right_value."
+            )
+
+        if has_col:
+            if self.right_column not in df.columns:
+                raise ValueError(f"Right operand column not found: {self.right_column}")
+            return pd.to_numeric(df[self.right_column], errors="coerce")
+
+        right_value = self.right_value
+        if right_value is None:
+            raise ValueError(
+                "ColumnCalculationRecommendation requires right_value when right_column is not provided."
+            )
+        return pd.Series(float(right_value), index=df.index, dtype="float64")
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply the configured binary operation and write to output_column."""
+        left = pd.to_numeric(df[self.column_name], errors="coerce")
+        right = self._resolve_right_operand(df)
+        op = self.operation.value
+
+        if op == "+":
+            result = left + right
+        elif op == "-":
+            result = left - right
+        elif op == "*":
+            result = left * right
+        elif op == "/":
+            if self.safe_divide:
+                if isinstance(right, pd.Series):
+                    right = right.mask(right.eq(0))
+                elif right == 0:
+                    right = np.nan
+            result = left / right
+        else:
+            raise ValueError(
+                "Unsupported calculation operation. Supported operations: +, -, *, /"
+            )
+
+        target = self.output_column or f"{self.column_name}_{op}"
+        df[target] = result
+        return df
+
+    def info(self) -> None:
+        """Print calculation configuration details."""
+        print("  Recommendation: FEATURE_CALCULATION")
+        print(f"    ID: {self.id}")
+        print(f"    Enabled: {self.enabled}")
+        if self.is_locked:
+            print("    Source: User Hint")
+        rhs = self.right_column if self.right_column else self.right_value
+        print(f"    Formula: '{self.column_name}' {self.operation.value} '{rhs}'")
+        print(f"    Output Column: '{self.output_column}'")
+
+    def required_columns(self) -> set[str]:
+        """Return required source columns for this calculation."""
+        required = {self.column_name}
+        if self.right_column:
+            required.add(self.right_column)
+        return required
+
+    def produced_columns(self) -> set[str]:
+        """Return the output column created by this recommendation."""
+        if self.output_column:
+            return {self.output_column}
+        return {f"{self.column_name}_{self.operation.value}"}
+
+
+@dataclass
+class FunctionApplyRecommendation(Recommendation):
+    """
+    Recommendation to apply a common ML-oriented unary function to a column.
+
+    Supported functions are intentionally constrained to frequently used numeric
+    transforms: ``log1p``, ``log``, ``sqrt``, ``square``, ``abs``, ``exp``,
+    ``reciprocal``, ``standardize``, and ``minmax_scale``.
+    """
+
+    @property
+    def rec_type(self) -> RecommendationType:
+        """Always returns RecommendationType.FEATURE_FUNCTION."""
+        return RecommendationType.FEATURE_FUNCTION
+
+    function_name: TransformFunction = field(
+        default=TransformFunction.LOG1P, metadata={"editable": True}
+    )
+    output_column: str = field(default="", metadata={"editable": True})
+    clip_lower: float | None = field(default=None, metadata={"editable": True})
+    clip_upper: float | None = field(default=None, metadata={"editable": True})
+    fillna_value: float | None = field(default=None, metadata={"editable": True})
+    epsilon: float = field(default=1e-9, metadata={"editable": True})
+
+    _ALLOWED_FUNCTIONS: ClassVar[set[TransformFunction]] = {
+        TransformFunction.LOG1P,
+        TransformFunction.LOG,
+        TransformFunction.SQRT,
+        TransformFunction.SQUARE,
+        TransformFunction.ABS,
+        TransformFunction.EXP,
+        TransformFunction.RECIPROCAL,
+        TransformFunction.STANDARDIZE,
+        TransformFunction.MINMAX_SCALE,
+    }
+
+    def __post_init__(self):
+        self.id = self.compute_stable_id()
+        self._lock_fields()
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply the configured transform and write to output_column."""
+        fn = self.function_name
+
+        s = pd.to_numeric(df[self.column_name], errors="coerce")
+        if self.clip_lower is not None or self.clip_upper is not None:
+            s = s.clip(lower=self.clip_lower, upper=self.clip_upper)
+
+        if fn == TransformFunction.LOG1P:
+            result = np.log1p(s.clip(lower=0))
+        elif fn == TransformFunction.LOG:
+            result = np.log(s.clip(lower=self.epsilon))
+        elif fn == TransformFunction.SQRT:
+            result = np.sqrt(s.clip(lower=0))
+        elif fn == TransformFunction.SQUARE:
+            result = np.square(s)
+        elif fn == TransformFunction.ABS:
+            result = np.abs(s)
+        elif fn == TransformFunction.EXP:
+            result = np.exp(s)
+        elif fn == TransformFunction.RECIPROCAL:
+            denom = s.mask(s.abs() <= self.epsilon)
+            result = 1.0 / denom
+        elif fn == TransformFunction.STANDARDIZE:
+            std = s.std(ddof=0)
+            if pd.isna(std) or std == 0:
+                result = s * 0.0
+            else:
+                result = (s - s.mean()) / std
+        else:  # minmax_scale
+            min_val = s.min()
+            max_val = s.max()
+            denom = max_val - min_val
+            if pd.isna(denom) or denom == 0:
+                result = s * 0.0
+            else:
+                result = (s - min_val) / denom
+
+        # Some numpy transforms may return ndarray; normalize to Series for downstream ops.
+        if not isinstance(result, pd.Series):
+            result = pd.Series(result, index=s.index)
+
+        if self.fillna_value is not None:
+            result = result.fillna(self.fillna_value)
+
+        target = self.output_column or f"{self.column_name}_{fn}"
+        df[target] = result
+        return df
+
+    def info(self) -> None:
+        """Print transform details."""
+        print("  Recommendation: FEATURE_FUNCTION")
+        print(f"    ID: {self.id}")
+        print(f"    Enabled: {self.enabled}")
+        if self.is_locked:
+            print("    Source: User Hint")
+        print(f"    Function: {self.function_name.value}")
+        print(f"    Input Column: '{self.column_name}'")
+        print(f"    Output Column: '{self.output_column}'")
+
+    def produced_columns(self) -> set[str]:
+        """Return the output column created by this transform."""
+        if self.output_column:
+            return {self.output_column}
+        return {f"{self.column_name}_{self.function_name.value}"}
+
+
+@dataclass
 class ColumnHint:
     """
     User-provided metadata to override or guide the recommendation engine.
@@ -3164,6 +3379,26 @@ class ColumnHint:
         Human-readable explanation of why the interaction is useful.
     interaction_derived_name : str, optional
         Output column name for the derived interaction feature.
+    calculation_operation : str, optional
+        Binary operation for simple feature math (``+``, ``-``, ``*``, ``/``).
+    calculation_right_column : str, optional
+        Right-hand operand column for simple feature math.
+    calculation_right_value : float, optional
+        Right-hand scalar operand for simple feature math.
+    calculation_output_name : str, optional
+        Output column name for the calculated feature.
+    function_name : str, optional
+        Unary transform function to apply to the column (e.g., ``log1p``).
+    function_output_name : str, optional
+        Output column name for the function-derived feature.
+    function_clip_lower : float, optional
+        Optional lower clip bound applied before function transform.
+    function_clip_upper : float, optional
+        Optional upper clip bound applied before function transform.
+    function_fillna_value : float, optional
+        Optional value used to fill NaNs after function transform.
+    function_epsilon : float, optional
+        Small constant used by numerically sensitive transforms.
     outlier_strategy : OutlierStrategy, optional
         Strategy for mitigating outliers through scaling or row removal.
     is_ignored : bool, default False
@@ -3216,6 +3451,16 @@ class ColumnHint:
     interaction_operation: str | None = None
     interaction_rationale: str | None = None
     interaction_derived_name: str | None = None
+    calculation_operation: CalculationOperation | None = None
+    calculation_right_column: str | None = None
+    calculation_right_value: float | None = None
+    calculation_output_name: str | None = None
+    function_name: TransformFunction | None = None
+    function_output_name: str | None = None
+    function_clip_lower: float | None = None
+    function_clip_upper: float | None = None
+    function_fillna_value: float | None = None
+    function_epsilon: float | None = None
     outlier_strategy: OutlierStrategy | None = None
     is_ignored: bool = False
     should_drop: bool = False
@@ -3617,6 +3862,66 @@ class ColumnHint:
         )
 
     @classmethod
+    def calculation(
+        cls,
+        operation: CalculationOperation,
+        *,
+        right_column: str | None = None,
+        right_value: float | None = None,
+        output_name: str | None = None,
+    ) -> "ColumnHint":
+        """
+        Hint that a simple binary column/value calculation should be engineered.
+
+        Exactly one of ``right_column`` or ``right_value`` must be provided.
+        Parenthetical expressions are intentionally not supported.
+        """
+        if (right_column is None) == (right_value is None):
+            raise ValueError(
+                "calculation hints require exactly one of right_column or right_value"
+            )
+        if right_column is not None and not right_column.strip():
+            raise ValueError("calculation hints require a non-empty right_column")
+
+        return cls(
+            logical_type=ColumnHintType.CALCULATION,
+            calculation_operation=operation,
+            calculation_right_column=right_column,
+            calculation_right_value=right_value,
+            calculation_output_name=output_name,
+        )
+
+    @classmethod
+    def function(
+        cls,
+        function_name: TransformFunction,
+        *,
+        output_name: str | None = None,
+        clip_lower: float | None = None,
+        clip_upper: float | None = None,
+        fillna_value: float | None = None,
+        epsilon: float = 1e-9,
+    ) -> "ColumnHint":
+        """
+        Hint that a unary transform should be applied to a numeric feature.
+
+        Supported functions: ``log1p``, ``log``, ``sqrt``, ``square``, ``abs``,
+        ``exp``, ``reciprocal``, ``standardize``, ``minmax_scale``.
+        """
+        if epsilon <= 0:
+            raise ValueError("function hints require epsilon > 0")
+
+        return cls(
+            logical_type=ColumnHintType.FUNCTION,
+            function_name=function_name,
+            function_output_name=output_name,
+            function_clip_lower=clip_lower,
+            function_clip_upper=clip_upper,
+            function_fillna_value=fillna_value,
+            function_epsilon=epsilon,
+        )
+
+    @classmethod
     def outlier_detection(
         cls,
         strategy: OutlierStrategy = OutlierStrategy.SCALING,
@@ -3787,6 +4092,8 @@ class RecommendationManager:
         RecommendationType.FEATURE_EXTRACTION: 6,
         RecommendationType.FEATURE_INTERACTION: 6,
         RecommendationType.FEATURE_AGGREGATION: 6,
+        RecommendationType.FEATURE_CALCULATION: 6,
+        RecommendationType.FEATURE_FUNCTION: 6,
         # 7: ML readiness & final refinements
         RecommendationType.ENCODING: 7,
         RecommendationType.DECIMAL_PRECISION_OPTIMIZATION: 7,
@@ -4848,7 +5155,46 @@ class RecommendationManager:
             _append_hint_recommendation(rec_interaction)
             return
 
-        # 11. Explicit Outlier Detection
+        # 11. Explicit Simple Column Calculation
+        if hint.logical_type == ColumnHintType.CALCULATION:
+            operation = hint.calculation_operation or CalculationOperation.SUBTRACT
+            rec_calc = ColumnCalculationRecommendation(
+                column_name=col_name,
+                description=(
+                    f"Engineer calculation for '{col_name}' using '{operation.value}'{user_note}"
+                ),
+                operation=operation,
+                right_column=hint.calculation_right_column,
+                right_value=hint.calculation_right_value,
+                output_column=(
+                    hint.calculation_output_name or f"{col_name}_{operation.value}"
+                ),
+                safe_divide=True,
+            )
+            _append_hint_recommendation(rec_calc)
+            return
+
+        # 12. Explicit Unary Function Transform
+        if hint.logical_type == ColumnHintType.FUNCTION:
+            function_name = hint.function_name or TransformFunction.LOG1P
+            rec_fn = FunctionApplyRecommendation(
+                column_name=col_name,
+                description=(
+                    f"Apply function '{function_name.value}' to '{col_name}'{user_note}"
+                ),
+                function_name=function_name,
+                output_column=(
+                    hint.function_output_name or f"{col_name}_{function_name.value}"
+                ),
+                clip_lower=hint.function_clip_lower,
+                clip_upper=hint.function_clip_upper,
+                fillna_value=hint.function_fillna_value,
+                epsilon=hint.function_epsilon or 1e-9,
+            )
+            _append_hint_recommendation(rec_fn)
+            return
+
+        # 13. Explicit Outlier Detection
         if hint.logical_type == ColumnHintType.OUTLIER_DETECTION:
             strategy = hint.outlier_strategy or OutlierStrategy.SCALING
             rec_outlier = OutlierDetectionRecommendation(
@@ -4863,7 +5209,7 @@ class RecommendationManager:
             _append_hint_recommendation(rec_outlier)
             return
 
-        # 12. Datetime Logic
+        # 14. Datetime Logic
         if hint.logical_type == ColumnHintType.DATETIME:
             if not pd.api.types.is_datetime64_any_dtype(series):
                 fmt_desc = (
@@ -4892,7 +5238,7 @@ class RecommendationManager:
             _append_hint_recommendation(extraction_rec)
             return
 
-        # 13. Distance Logic
+        # 15. Distance Logic
         elif hint.logical_type == ColumnHintType.DISTANCE:
             lower_bound = float(hint.floor) if hint.floor is not None else 0.0
             upper_bound = float(hint.ceiling) if hint.ceiling is not None else 500.0
@@ -4907,7 +5253,7 @@ class RecommendationManager:
             _append_hint_recommendation(rec_distance)
             return
 
-        # 14. Geospatial Logic
+        # 16. Geospatial Logic
         elif hint.logical_type == ColumnHintType.GEOSPATIAL:
             if hint.lat_bounds is not None:
                 lat_lower, lat_upper = hint.lat_bounds
@@ -4932,7 +5278,7 @@ class RecommendationManager:
                 _append_hint_recommendation(rec_lon)
             return
 
-        # 15. Aggregation Logic
+        # 17. Aggregation Logic
         elif (
             hint.logical_type == ColumnHintType.AGGREGATE
             and hint.agg_columns
@@ -4961,7 +5307,7 @@ class RecommendationManager:
             _append_hint_recommendation(rec_agg)
             return
 
-        # 16. Numeric & Financial Logic
+        # 18. Numeric & Financial Logic
         elif hint.logical_type in (ColumnHintType.NUMERIC, ColumnHintType.FINANCIAL):
             if hint.floor is not None or hint.ceiling is not None:
                 lower = (
@@ -5876,6 +6222,8 @@ class RecommendationManager:
                 StringMatchFlagRecommendation,
             ],
             RecommendationType.FEATURE_AGGREGATION: [AggregationRecommendation],
+            RecommendationType.FEATURE_CALCULATION: [ColumnCalculationRecommendation],
+            RecommendationType.FEATURE_FUNCTION: [FunctionApplyRecommendation],
         }
 
     @staticmethod

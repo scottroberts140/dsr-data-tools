@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 2.2.3**: Added derived flag recommendations for numeric threshold and exact string matching workflows, plus manager support for staged YAML hydration and snippet coverage for the new recommendation shapes.
+**Version 2.2.4**: Added feature-calculation and unary-transform recommendation support, including public enums for operation/function choices and manager/test coverage for the new recommendation types.
 
 ## Features
 
@@ -16,6 +16,7 @@ Data analysis and exploration tools for exploratory data analysis (EDA).
 - **Quality Metrics**: Missing value detection, data type analysis, and anomaly identification.
 - **Statistically Guided Feature Interactions**: Automatic discovery of meaningful feature interactions using Mutual Information and Pearson Correlation.
 - **Recommendation Engine**: Intelligent pipeline for Boolean mapping, Numerical casting, and Datetime standardization with customizable execution priority.
+- **Feature Math and Transforms**: Build derived features with arithmetic operations and apply reusable unary transforms (log, sqrt, scaling, reciprocal, and more).
 - **User-Guided ColumnHints**: Explicitly guide the engine with metadata for financial, geospatial, or temporal data to override automated heuristics.
 - **Intelligent Boolean Mapping**: Detects and standardizes diverse truthiness indicators (e.g., "Y/N", "Active/Inactive", "1/0") into proper boolean types.
 - **Cyclic Feature Extraction**: Decomposes datetimes into periodic Sine/Cosine features to preserve temporal relationships for machine learning.
@@ -35,7 +36,7 @@ import pandas as pd
 from dsr_data_tools import analyze_dataset
 
 # Load your data
-df = pd.read_csv('data.csv')
+df = pd.read_csv("data.csv")
 
 # Perform comprehensive analysis
 # Returns DataframeInfo, RecommendationManager (or None), and per-column text output
@@ -61,21 +62,25 @@ from dsr_data_tools.recommendations import apply_recommendations
 
 # Example column with mostly valid date strings
 df = pd.DataFrame({
- 'date_str': [
-  '2025-01-01', '2025-01-02', '2025-01-03',
-  '2025-01-04', 'invalid',  # one invalid value
- ] * 10  # scale up rows
+    "date_str": [
+        "2025-01-01",
+        "2025-01-02",
+        "2025-01-03",
+        "2025-01-04",
+        "invalid",  # one invalid value
+    ]
+    * 10  # scale up rows
 })
 
 recs = generate_recommendations(df)
 
 # If detected, apply the datetime conversion recommendation
-if 'date_str' in recs and 'datetime_conversion' in recs['date_str']:
- df_converted = apply_recommendations(df, {
-  'date_str': recs['date_str']['datetime_conversion']
- })
- # Column is now datetime64; invalid entries coerced to NaT
- print(df_converted['date_str'].dtype)  # datetime64[ns]
+if "date_str" in recs and "datetime_conversion" in recs["date_str"]:
+    df_converted = apply_recommendations(
+        df, {"date_str": recs["date_str"]["datetime_conversion"]}
+    )
+    # Column is now datetime64; invalid entries coerced to NaT
+    print(df_converted["date_str"].dtype)  # datetime64[ns]
 ```
 
 ### Boolean Classification
@@ -87,9 +92,7 @@ from dsr_data_tools.recommendations import BooleanClassificationRecommendation
 
 df = pd.DataFrame({"active": ["Y", "N", "Y"]})
 rec = BooleanClassificationRecommendation(
-    column_name="active",
-    description="Convert to bool",
-    values=["Y", "N"]
+    column_name="active", description="Convert to bool", values=["Y", "N"]
 )
 
 # Returns [True, False, True]
@@ -107,7 +110,7 @@ rec = DatetimeDurationRecommendation(
     start_column="order_date",
     end_column="delivery_date",
     output_column="days_to_deliver",
-    unit="days"
+    unit="days",
 )
 
 df = rec.apply(df)
@@ -129,10 +132,7 @@ The engine allows choosing between statistical imputation (mean/median/mode), co
 from dataclasses import fields
 
 # Discover which fields are whitelisted for user edits in your pipeline
-editable_fields = [
-    f.name for f in fields(rec) 
-    if f.metadata.get("editable", False)
-]
+editable_fields = [f.name for f in fields(rec) if f.metadata.get("editable", False)]
 # Returns: ['strategy', 'fill_value', 'notes', 'enabled', 'alias']
 ```
 
@@ -150,13 +150,15 @@ from dsr_data_tools.analysis import RecommendationManager
 from dsr_data_tools.recommendations import ColumnHint, RoundingMode
 
 # Load data
-df = pd.read_csv('data.csv')
+df = pd.read_csv("data.csv")
 
 # Define explicit hints to override or guide the engine
 hints = {
-    "unit_price": ColumnHint.financial(decimal_places=2, rounding_mode=RoundingMode.BANKERS),
+    "unit_price": ColumnHint.financial(
+        decimal_places=2, rounding_mode=RoundingMode.BANKERS
+    ),
     "user_id": ColumnHint.numeric(convert_to_int=True),
-    "internal_notes": ColumnHint.ignore()
+    "internal_notes": ColumnHint.ignore(),
 }
 
 manager = RecommendationManager()

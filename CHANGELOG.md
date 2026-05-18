@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.4] - 2026-05-18
+
+### Added
+
+* **Feature Calculation Recommendation**: Added `ColumnCalculationRecommendation` support for derived columns using binary operations (`ADD`, `SUBTRACT`, `MULTIPLY`, `DIVIDE`) against another column or a scalar value.
+* **Unary Feature Function Recommendation**: Added `FunctionApplyRecommendation` support for common numeric transforms (`LOG1P`, `LOG`, `SQRT`, `SQUARE`, `ABS`, `EXP`, `RECIPROCAL`, `STANDARDIZE`, `MINMAX_SCALE`) with clipping and fill controls.
+* **Public Enum Exports**: Exported `CalculationOperation` and `TransformFunction` from package top-level imports for easier downstream type-safe authoring.
+
+### Changed
+
+* **Recommendation Surface and Tests**: Extended package exports and recommendation manager coverage so new recommendation types behave consistently with existing staging, YAML hydration, and engineering test workflows.
+
 ## [2.2.3] - 2026-05-14
 
 ### Added

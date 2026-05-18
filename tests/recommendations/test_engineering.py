@@ -1,18 +1,22 @@
 import pandas as pd
-
+import pytest
+from dsr_data_tools.enums import CalculationOperation, TransformFunction
 from dsr_data_tools.recommendations import (
+    ColumnCalculationRecommendation,
     DatetimeDurationRecommendation,
     DatetimeProperty,
     FeatureExtractionRecommendation,
     FeatureInteractionRecommendation,
+    FunctionApplyRecommendation,
     InteractionType,
 )
 
 
 def test_datetime_duration_apply():
-    df = pd.DataFrame(
-        {"start": pd.to_datetime(["2023-01-01"]), "end": pd.to_datetime(["2023-01-05"])}
-    )
+    df = pd.DataFrame({
+        "start": pd.to_datetime(["2023-01-01"]),
+        "end": pd.to_datetime(["2023-01-05"]),
+    })
     rec = DatetimeDurationRecommendation(
         column_name="start",
         description="Calc duration",
@@ -53,3 +57,33 @@ def test_datetime_feature_extraction():
     assert "date_day" in df.columns
     assert "date_month" not in df.columns  # Ensure bitmask was respected
     assert df["date_year"].iloc[0] == 2023
+
+
+def test_column_calculation_apply_subtraction():
+    df = pd.DataFrame({"capital_gain": [1000.0, 500.0], "capital_loss": [100.0, 50.0]})
+    rec = ColumnCalculationRecommendation(
+        column_name="capital_gain",
+        description="Net capital",
+        operation=CalculationOperation.SUBTRACT,
+        right_column="capital_loss",
+        output_column="net_capital",
+    )
+
+    out = rec.apply(df)
+    assert "net_capital" in out.columns
+    assert out["net_capital"].tolist() == [900.0, 450.0]
+
+
+def test_function_apply_log1p():
+    df = pd.DataFrame({"capital_gain": [0.0, 9.0, 99.0]})
+    rec = FunctionApplyRecommendation(
+        column_name="capital_gain",
+        description="log1p transform",
+        function_name=TransformFunction.LOG1P,
+        output_column="log_capital_gain",
+    )
+
+    out = rec.apply(df)
+    assert "log_capital_gain" in out.columns
+    assert out["log_capital_gain"].iloc[0] == 0.0
+    assert out["log_capital_gain"].iloc[1] == pytest.approx(2.30258509299)
