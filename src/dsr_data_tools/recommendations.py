@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import uuid
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from enum import Enum, Flag
@@ -47,6 +48,66 @@ def _generate_recommendation_id() -> str:
         A string ID prefixed with 'rec_' followed by 8 random hex characters.
     """
     return f"rec_{uuid.uuid4().hex[:8]}"
+
+
+_ALLOWED_NAME_POLICIES = {"off", "warn", "strict"}
+_DERIVED_NAME_POLICY = "warn"
+_DISALLOWED_DERIVED_NAME_CHARS = re.compile(r"[\[\]<>]")
+_DERIVED_NAME_WHITESPACE = re.compile(r"\s+")
+_DERIVED_NAME_UNDERSCORES = re.compile(r"_+")
+
+
+def set_derived_name_policy(policy: str) -> str:
+    """Set the derived-name handling policy and return the normalized value."""
+    global _DERIVED_NAME_POLICY
+
+    normalized = str(policy).strip().lower()
+    if normalized not in _ALLOWED_NAME_POLICIES:
+        allowed = ", ".join(sorted(_ALLOWED_NAME_POLICIES))
+        raise ValueError(
+            f"Invalid derived-name policy {policy!r}. Choose one of: {allowed}."
+        )
+
+    _DERIVED_NAME_POLICY = normalized
+    return _DERIVED_NAME_POLICY
+
+
+def _normalize_derived_name(
+    value: str, *, allow_wildcard: bool, field_name: str
+) -> str:
+    """Normalize derived output names according to the active policy."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError(f"{field_name} cannot be empty")
+
+    if _DERIVED_NAME_POLICY == "off":
+        return candidate
+
+    normalized = _DISALLOWED_DERIVED_NAME_CHARS.sub("_", candidate)
+    normalized = _DERIVED_NAME_WHITESPACE.sub("_", normalized)
+    if not allow_wildcard:
+        normalized = normalized.replace("*", "_")
+    normalized = _DERIVED_NAME_UNDERSCORES.sub("_", normalized).strip("_")
+
+    if not normalized:
+        raise ValueError(
+            f"{field_name} became empty after normalization under "
+            f"derived-name policy {_DERIVED_NAME_POLICY!r}."
+        )
+
+    if normalized != candidate:
+        msg = (
+            f"{field_name} normalized from {candidate!r} to {normalized!r} under "
+            f"derived-name policy {_DERIVED_NAME_POLICY!r}."
+        )
+        if _DERIVED_NAME_POLICY == "strict":
+            raise ValueError(msg)
+        warnings.warn(msg, UserWarning, stacklevel=3)
+
+    return normalized
 
 
 def _detect_non_numeric_values(
@@ -2271,7 +2332,8 @@ class FeatureInteractionRecommendation(Recommendation):
     Parameters
     ----------
     column_name_2 : str, default ""
-        The secondary column used in the interaction.
+        The secondary column used in the interaction. Supports '*' wildcard
+        patterns (for example, 'occupation_*') to target multiple columns.
     interaction_type : InteractionType, default InteractionType.STATUS_IMPACT
         The domain-specific category of the interaction.
     operation : str, default "*"
@@ -2348,6 +2410,12 @@ class FeatureInteractionRecommendation(Recommendation):
             sep = "_" if self.operation == "*" else "_vs_"
             self.derived_name = f"{self.column_name}{sep}{suffix}"
 
+        self.derived_name = _normalize_derived_name(
+            self.derived_name,
+            allow_wildcard="*" in self.derived_name,
+            field_name="derived_name",
+        )
+
         self.id = self.compute_stable_id()
         self._lock_fields()
 
@@ -2377,21 +2445,98 @@ class FeatureInteractionRecommendation(Recommendation):
         The method handles division by zero by converting denominators of 0
         to NaN to prevent calculation errors.
         """
-        if self.column_name not in df.columns or self.column_name_2 not in df.columns:
+        if self.column_name not in df.columns:
             raise KeyError(
-                f"Interaction failed: One or both columns ('{self.column_name}', "
-                f"'{self.column_name_2}') missing from DataFrame."
+                f"Interaction failed: Source column '{self.column_name}' "
+                "is missing from DataFrame."
             )
 
-        if self.operation == "*":
-            df[self.derived_name] = df[self.column_name] * df[self.column_name_2]
-        elif self.operation == "/":
-            denominator = df[self.column_name_2].replace(0, np.nan)
-            df[self.derived_name] = df[self.column_name] / denominator
-        else:
-            raise ValueError(f"Unsupported interaction operation: {self.operation}")
+        secondary_series = self._resolve_secondary_series(df)
+        generated_columns: set[str] = set()
+
+        for secondary_column, values in secondary_series.items():
+            output_column = self._output_column_for_secondary(secondary_column)
+            if output_column in generated_columns:
+                raise ValueError(
+                    "Interaction failed: multiple wildcard matches resolved to "
+                    f"the same derived column {output_column!r}."
+                )
+            generated_columns.add(output_column)
+
+            if self.operation == "*":
+                df[output_column] = df[self.column_name] * values
+            elif self.operation == "/":
+                denominator = values.replace(0, np.nan)
+                df[output_column] = df[self.column_name] / denominator
+            else:
+                raise ValueError(f"Unsupported interaction operation: {self.operation}")
 
         return df
+
+    def _resolve_secondary_series(self, df: pd.DataFrame) -> dict[str, pd.Series]:
+        """Resolves the secondary dependency to one or more named series."""
+        if "*" not in self.column_name_2:
+            if self.column_name_2 not in df.columns:
+                raise KeyError(
+                    f"Interaction failed: Secondary column '{self.column_name_2}' "
+                    "is missing from DataFrame."
+                )
+            return {self.column_name_2: df[self.column_name_2]}
+
+        pattern = re.compile(
+            "^" + re.escape(self.column_name_2).replace(r"\*", ".*") + "$"
+        )
+        matched_columns = [column for column in df.columns if pattern.match(column)]
+        if matched_columns:
+            return {column: df[column] for column in matched_columns}
+
+        # Fallback: synthesize OHE columns from the source categorical if
+        # wildcard targets are not present yet (e.g., occupation_*).
+        source_column = self._infer_source_column_from_pattern()
+        if source_column and source_column in df.columns:
+            dummy_frame = pd.get_dummies(
+                df[source_column], prefix=source_column, drop_first=False
+            )
+            dummy_columns = [
+                column for column in dummy_frame.columns if pattern.match(column)
+            ]
+            if dummy_columns:
+                return {column: dummy_frame[column] for column in dummy_columns}
+
+        raise KeyError(
+            f"Interaction failed: Pattern '{self.column_name_2}' matched no columns."
+        )
+
+    def _infer_source_column_from_pattern(self) -> str | None:
+        """Infers source categorical column name from simple wildcard pattern."""
+        if self.column_name_2.endswith("_*"):
+            return self.column_name_2[:-2]
+
+        return None
+
+    def _output_column_for_secondary(self, secondary_column: str) -> str:
+        """Builds output column names for single-column and wildcard interactions."""
+        if "*" not in self.column_name_2:
+            return _normalize_derived_name(
+                self.derived_name,
+                allow_wildcard=False,
+                field_name="derived_name",
+            )
+
+        if "*" in self.derived_name:
+            output_column = self.derived_name.replace("*", secondary_column)
+            return _normalize_derived_name(
+                output_column,
+                allow_wildcard=False,
+                field_name="derived_name",
+            )
+
+        output_column = f"{self.derived_name}_{secondary_column}"
+        return _normalize_derived_name(
+            output_column,
+            allow_wildcard=False,
+            field_name="derived_name",
+        )
 
     def info(self) -> None:
         """Prints a detailed summary of the feature engineering step."""
@@ -2410,6 +2555,8 @@ class FeatureInteractionRecommendation(Recommendation):
 
     def required_columns(self) -> set[str]:
         """Returns source columns: the primary column and the secondary interaction column."""
+        if "*" in self.column_name_2:
+            return {self.column_name}
         return {self.column_name, self.column_name_2}
 
     def produced_columns(self) -> set[str]:

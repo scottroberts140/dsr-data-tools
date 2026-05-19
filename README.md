@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 2.2.4**: Added feature-calculation and unary-transform recommendation support, including public enums for operation/function choices and manager/test coverage for the new recommendation types.
+**Version 2.2.5**: Added configurable derived-name policy controls (`off`, `warn`, `strict`) to normalize or strictly validate recommendation output names and prevent wildcard post-normalization collisions.
 
 ## Features
 

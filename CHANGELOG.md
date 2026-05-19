@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.5] - 2026-05-19
+
+### Added
+
+* **Derived Name Policy Controls**: Added global recommendation derived-name policy controls via `set_derived_name_policy()` with `off`, `warn`, and `strict` modes.
+
+### Changed
+
+* **Feature Interaction Name Normalization**: `FeatureInteractionRecommendation` now normalizes invalid derived names in `warn` mode and enforces strict validation in `strict` mode.
+
+### Fixed
+
+* **Wildcard Output Collision Detection**: Added collision checks for wildcard interaction outputs after normalization to prevent multiple matches resolving to the same derived column name.
+
 ## [2.2.4] - 2026-05-18
 
 ### Added

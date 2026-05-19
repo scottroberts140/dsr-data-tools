@@ -9,6 +9,7 @@ from dsr_data_tools.recommendations import (
     FeatureInteractionRecommendation,
     FunctionApplyRecommendation,
     InteractionType,
+    set_derived_name_policy,
 )
 
 
@@ -87,3 +88,54 @@ def test_function_apply_log1p():
     assert "log_capital_gain" in out.columns
     assert out["log_capital_gain"].iloc[0] == 0.0
     assert out["log_capital_gain"].iloc[1] == pytest.approx(2.30258509299)
+
+
+def test_feature_interaction_warn_mode_normalizes_invalid_derived_name():
+    set_derived_name_policy("warn")
+    try:
+        with pytest.warns(UserWarning, match="normalized"):
+            rec = FeatureInteractionRecommendation(
+                column_name="A",
+                column_name_2="B",
+                interaction_type=InteractionType.RESOURCE_DENSITY,
+                operation="/",
+                description="Ratio",
+                derived_name="A_<B",
+            )
+
+        assert rec.derived_name == "A_B"
+    finally:
+        set_derived_name_policy("warn")
+
+
+def test_feature_interaction_strict_mode_rejects_invalid_derived_name():
+    set_derived_name_policy("strict")
+    try:
+        with pytest.raises(ValueError, match="normalized"):
+            FeatureInteractionRecommendation(
+                column_name="A",
+                column_name_2="B",
+                interaction_type=InteractionType.RESOURCE_DENSITY,
+                operation="/",
+                description="Ratio",
+                derived_name="A_<B",
+            )
+    finally:
+        set_derived_name_policy("warn")
+
+
+def test_feature_interaction_off_mode_preserves_invalid_derived_name():
+    set_derived_name_policy("off")
+    try:
+        rec = FeatureInteractionRecommendation(
+            column_name="A",
+            column_name_2="B",
+            interaction_type=InteractionType.RESOURCE_DENSITY,
+            operation="/",
+            description="Ratio",
+            derived_name="A_<B",
+        )
+
+        assert rec.derived_name == "A_<B"
+    finally:
+        set_derived_name_policy("warn")
