@@ -660,7 +660,8 @@ class EncodingRecommendation(Recommendation):
 
     Categorical columns require transformation before they can be used in most
     mathematical models. This class supports One-Hot Encoding (binary columns),
-    Label Encoding (integers), or Categorical Dtype (memory optimization).
+    Label Encoding (integers), Target Encoding (smoothed means), or Categorical
+    Dtype (memory optimization).
 
     Parameters
     ----------
@@ -668,6 +669,13 @@ class EncodingRecommendation(Recommendation):
         The chosen EncodingStrategy (EDITABLE).
     unique_values : int, default 0
         Cardinality of the column, used to estimate the impact of One-Hot encoding.
+    target_column : str | None, default None
+        Required when using ``EncodingStrategy.TARGET``. Identifies the target
+        column used to compute per-category means.
+    min_samples_leaf : int, default 1
+        Minimum-category support used in the TARGET smoothing curve.
+    smoothing : float, default 10.0
+        Higher values produce stronger shrinkage toward the global target mean.
     **kwargs : dict
         Additional keyword arguments passed to the Recommendation base class.
     """
@@ -688,6 +696,9 @@ class EncodingRecommendation(Recommendation):
         default=EncodingStrategy.ONEHOT, metadata={"editable": True}
     )
     unique_values: int = field(default=0, metadata={"editable": False})
+    target_column: str | None = field(default=None, metadata={"editable": True})
+    min_samples_leaf: int = field(default=1, metadata={"editable": True})
+    smoothing: float = field(default=10.0, metadata={"editable": True})
 
     @classmethod
     def get_by_id(
@@ -745,6 +756,7 @@ class EncodingRecommendation(Recommendation):
         -----
         - Label and Ordinal strategies preserve null values as NaN/None.
         - One-Hot encoding generates new columns and removes the original.
+        - Target encoding computes smoothed per-category means from target values.
         """
         if self.column_name not in df.columns:
             return df
@@ -783,7 +795,98 @@ class EncodingRecommendation(Recommendation):
             # OrdinalEncoder expects a 2D input (DataFrame)
             df[self.column_name] = oe.fit_transform(df[[self.column_name]])
 
+        elif self.encoder_type == EncodingStrategy.TARGET:
+            encoded_map, global_mean = self.fit_target_encoding(df)
+            df = self.apply_target_encoding_mapping(df, encoded_map, global_mean)
+
         return df
+
+    def fit_target_encoding(self, df: pd.DataFrame) -> tuple[dict[str, float], float]:
+        """Fit a TARGET encoding map from a training DataFrame."""
+        if self.column_name not in df.columns:
+            raise ValueError(
+                f"TARGET encoding source column '{self.column_name}' was not found in the DataFrame."
+            )
+        if not self.target_column:
+            raise ValueError("TARGET encoding requires 'target_column' to be set.")
+        if self.target_column not in df.columns:
+            raise ValueError(
+                f"TARGET encoding target column '{self.target_column}' "
+                "was not found in the DataFrame."
+            )
+        if self.target_column == self.column_name:
+            raise ValueError(
+                "TARGET encoding cannot use the same source and target column."
+            )
+
+        target = self._coerce_target_for_target_encoding(df[self.target_column])
+        category = df[self.column_name].astype("string")
+
+        valid_mask = category.notna() & target.notna()
+        if not valid_mask.any():
+            raise ValueError(
+                "TARGET encoding found no rows with both non-null category and target values."
+            )
+
+        global_mean = float(target.loc[valid_mask].mean())
+        grouped = (
+            pd
+            .DataFrame({
+                "category": category.loc[valid_mask],
+                "target": target.loc[valid_mask],
+            })
+            .groupby("category", observed=False)["target"]
+            .agg(["mean", "count"])
+        )
+
+        min_leaf = max(int(self.min_samples_leaf), 1)
+        smoothing = float(self.smoothing)
+        if smoothing > 0:
+            smooth_factor = 1.0 / (
+                1.0 + np.exp(-(grouped["count"] - min_leaf) / smoothing)
+            )
+            encoded_map = (
+                global_mean * (1.0 - smooth_factor) + grouped["mean"] * smooth_factor
+            )
+        else:
+            encoded_map = grouped["mean"]
+
+        encoded_map_series = pd.Series(encoded_map, copy=False)
+        mapping = {str(k): float(v) for k, v in encoded_map_series.items()}
+        return mapping, global_mean
+
+    def apply_target_encoding_mapping(
+        self,
+        df: pd.DataFrame,
+        encoded_map: dict[str, float],
+        global_mean: float,
+    ) -> pd.DataFrame:
+        """Apply a pre-fitted TARGET encoding map to a DataFrame."""
+        if self.column_name not in df.columns:
+            return df
+
+        category = df[self.column_name].astype("string")
+        encoded = category.map(encoded_map)
+        df[self.column_name] = encoded.fillna(global_mean).astype(float)
+        return df
+
+    def _coerce_target_for_target_encoding(self, target: pd.Series) -> pd.Series:
+        """Convert target values to numeric series for TARGET encoding."""
+        if pd.api.types.is_numeric_dtype(target):
+            return pd.to_numeric(target, errors="coerce").astype(float)
+
+        if pd.api.types.is_bool_dtype(target):
+            return target.astype(float)
+
+        target_as_str = target.astype("string")
+        unique_non_null = sorted(target_as_str.dropna().unique().tolist())
+        if len(unique_non_null) == 2:
+            mapping = {unique_non_null[0]: 0.0, unique_non_null[1]: 1.0}
+            return target_as_str.map(mapping).astype(float)
+
+        raise ValueError(
+            "TARGET encoding requires a numeric, boolean, or binary target column."
+        )
 
     def info(self) -> None:
         """Displays cardinality and the selected encoding strategy."""
@@ -809,6 +912,7 @@ class EncodingRecommendation(Recommendation):
             EncodingStrategy.ONEHOT: f"Expand into {self.unique_values} binary features",
             EncodingStrategy.LABEL: "Map categories to unique integers (preserves nulls)",
             EncodingStrategy.ORDINAL: "Map categories to sequential integers (unknowns = -1)",
+            EncodingStrategy.TARGET: "Map categories to smoothed target means",
         }
         return desc_map.get(self.encoder_type, "Apply encoding")
 
@@ -4548,6 +4652,9 @@ class RecommendationManager:
                 )
                 preserves_source = isinstance(
                     rec, (NonZeroFlagRecommendation, StringMatchFlagRecommendation)
+                ) or (
+                    isinstance(rec, EncodingRecommendation)
+                    and rec.encoder_type != EncodingStrategy.ONEHOT
                 )
                 if (
                     is_transformative
@@ -4564,6 +4671,140 @@ class RecommendationManager:
             result.drop(columns=final_drops, inplace=True)
 
         return result
+
+    def apply_to_splits(
+        self,
+        train_df: pd.DataFrame,
+        validation_df: pd.DataFrame | None = None,
+        test_df: pd.DataFrame | None = None,
+        allow_column_overwrite: bool = False,
+        drop_duplicates: bool = False,
+    ) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame | None]:
+        """
+        Apply the pipeline to train/validation/test with split-safe TARGET encoding.
+
+        TARGET encoding recommendations are fit only on the transformed training
+        split at the point they are executed, and the learned mapping is reused
+        for validation/test to avoid leakage from holdout targets.
+        """
+        self._validate_pipeline(train_df, allow_column_overwrite=allow_column_overwrite)
+        if validation_df is not None:
+            self._validate_pipeline(
+                validation_df, allow_column_overwrite=allow_column_overwrite
+            )
+        if test_df is not None:
+            self._validate_pipeline(
+                test_df, allow_column_overwrite=allow_column_overwrite
+            )
+
+        train_result = train_df.copy()
+        val_result = validation_df.copy() if validation_df is not None else None
+        test_result = test_df.copy() if test_df is not None else None
+
+        if drop_duplicates:
+            train_result = train_result.drop_duplicates()
+            if val_result is not None:
+                val_result = val_result.drop_duplicates()
+            if test_result is not None:
+                test_result = test_result.drop_duplicates()
+
+        collectors: dict[str, set[str]] = {"train": set(), "val": set(), "test": set()}
+
+        for stage in self._get_staged_pipeline(set(train_result.columns)):
+            for rec in stage:
+                split_frames: list[tuple[str, pd.DataFrame | None]] = [
+                    ("train", train_result),
+                    ("val", val_result),
+                    ("test", test_result),
+                ]
+
+                try:
+                    if (
+                        isinstance(rec, EncodingRecommendation)
+                        and rec.encoder_type == EncodingStrategy.TARGET
+                    ):
+                        encoded_map, global_mean = rec.fit_target_encoding(train_result)
+                        train_result = rec.apply_target_encoding_mapping(
+                            train_result, encoded_map, global_mean
+                        )
+                        if val_result is not None:
+                            val_result = rec.apply_target_encoding_mapping(
+                                val_result, encoded_map, global_mean
+                            )
+                        if test_result is not None:
+                            test_result = rec.apply_target_encoding_mapping(
+                                test_result, encoded_map, global_mean
+                            )
+                    else:
+                        for split_name, frame in split_frames:
+                            if frame is None:
+                                continue
+
+                            out_cols = rec.produced_columns()
+                            pre_apply_dtypes: dict[str, Any] = {
+                                col: frame[col].dtype
+                                for col in out_cols
+                                if col in frame.columns
+                            }
+
+                            transformed = rec.apply(frame)
+
+                            if allow_column_overwrite and pre_apply_dtypes:
+                                for col, pre_dtype in pre_apply_dtypes.items():
+                                    if col in transformed.columns:
+                                        current_dtype = transformed[col].dtype
+                                        if current_dtype != pre_dtype:
+                                            raise TypeError(
+                                                f"Incompatible Overwrite: {rec.id} changed "
+                                                f"'{col}' from {pre_dtype} to {current_dtype}."
+                                            )
+
+                            if split_name == "train":
+                                train_result = transformed
+                            elif split_name == "val":
+                                val_result = transformed
+                            else:
+                                test_result = transformed
+
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Pipeline Failure: {rec.id} ({rec.rec_type.name}) failed on "
+                        f"column '{rec.column_name}'. Error: {e}"
+                    ) from e
+
+                is_transformative = rec.rec_type in (
+                    RecommendationType.DATETIME_CONVERSION,
+                    RecommendationType.FEATURE_EXTRACTION,
+                    RecommendationType.ENCODING,
+                )
+                preserves_source = isinstance(
+                    rec, (NonZeroFlagRecommendation, StringMatchFlagRecommendation)
+                ) or (
+                    isinstance(rec, EncodingRecommendation)
+                    and rec.encoder_type != EncodingStrategy.ONEHOT
+                )
+                if is_transformative and not preserves_source:
+                    if rec.column_name in train_result.columns:
+                        collectors["train"].add(rec.column_name)
+                    if val_result is not None and rec.column_name in val_result.columns:
+                        collectors["val"].add(rec.column_name)
+                    if (
+                        test_result is not None
+                        and rec.column_name in test_result.columns
+                    ):
+                        collectors["test"].add(rec.column_name)
+
+        if collectors["train"]:
+            drops = [c for c in collectors["train"] if c in train_result.columns]
+            train_result = train_result.drop(columns=drops)
+        if val_result is not None and collectors["val"]:
+            drops = [c for c in collectors["val"] if c in val_result.columns]
+            val_result = val_result.drop(columns=drops)
+        if test_result is not None and collectors["test"]:
+            drops = [c for c in collectors["test"] if c in test_result.columns]
+            test_result = test_result.drop(columns=drops)
+
+        return train_result, val_result, test_result
 
     def execution_summary(self) -> None:
         """
@@ -4624,6 +4865,10 @@ class RecommendationManager:
             )
             and not isinstance(
                 r, (NonZeroFlagRecommendation, StringMatchFlagRecommendation)
+            )
+            and not (
+                isinstance(r, EncodingRecommendation)
+                and r.encoder_type != EncodingStrategy.ONEHOT
             )
         }
 

@@ -126,12 +126,15 @@ class EncodingStrategy(Enum):
         Ordinal encoding for ordered categorical variables.
     CATEGORICAL : str
         Convert to pandas categorical dtype for memory optimization.
+    TARGET : str
+        Target mean encoding for high-cardinality categorical variables.
     """
 
     ONEHOT = "onehot"
     LABEL = "label"
     ORDINAL = "ordinal"
     CATEGORICAL = "categorical"
+    TARGET = "target"
 
 
 class MissingValueStrategy(Enum):

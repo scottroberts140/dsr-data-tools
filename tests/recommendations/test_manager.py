@@ -458,6 +458,35 @@ def test_manager_generates_calculation_and_function_from_hints():
     assert rec_fn.is_locked is True
 
 
+def test_apply_to_splits_fits_target_encoding_on_train_only():
+    train_df = pd.DataFrame({
+        "occupation": ["Tech", "Tech", "Sales"],
+        "income": [1, 1, 0],
+    })
+    validation_df = pd.DataFrame({
+        "occupation": ["Tech", "Sales", "New"],
+        "income": [0, 1, 1],
+    })
+
+    rec = EncodingRecommendation(
+        column_name="occupation",
+        description="Target encode occupation",
+        encoder_type=EncodingStrategy.TARGET,
+        target_column="income",
+        smoothing=0.0,
+    )
+    manager = RecommendationManager(recommendations=[rec])
+
+    train_encoded, val_encoded, _ = manager.apply_to_splits(
+        train_df=train_df,
+        validation_df=validation_df,
+    )
+
+    assert train_encoded["occupation"].tolist() == pytest.approx([1.0, 1.0, 0.0])
+    assert val_encoded is not None
+    assert val_encoded["occupation"].tolist() == pytest.approx([1.0, 0.0, 2.0 / 3.0])
+
+
 def test_manager_propagates_hint_description_and_notes_to_recommendations():
     df = pd.DataFrame({"count": [1.0, 2.0, 3.0]})
 
