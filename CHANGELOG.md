@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.6] - 2026-05-20
+
+### Added
+
+* **TARGET Encoding Strategy**: Added `EncodingStrategy.TARGET` and extended `EncodingRecommendation` with editable `target_column`, `min_samples_leaf`, and `smoothing` controls.
+* **Split-Safe Encoding API**: Added `RecommendationManager.apply_to_splits()` to support train/validation/test application flows while reusing train-fitted TARGET mappings on holdout splits.
+
+### Changed
+
+* **Encoding Recommendation Documentation/Descriptions**: Updated encoding help text and descriptions to include smoothed TARGET mean encoding behavior.
+
+### Fixed
+
+* **Transformative Source-Drop Logic**: Updated recommendation drop-preservation logic so non-ONEHOT encoding strategies are treated as source-preserving transforms.
+
 ## [2.2.5] - 2026-05-19
 
 ### Added

@@ -7,7 +7,7 @@
 
 Data analysis and exploration tools for exploratory data analysis (EDA).
 
-**Version 2.2.5**: Added configurable derived-name policy controls (`off`, `warn`, `strict`) to normalize or strictly validate recommendation output names and prevent wildcard post-normalization collisions.
+**Version 2.2.6**: Added split-safe TARGET encoding support, including train-only fitting with holdout mapping reuse and editable smoothing controls (`target_column`, `min_samples_leaf`, `smoothing`).
 
 ## Features
 
